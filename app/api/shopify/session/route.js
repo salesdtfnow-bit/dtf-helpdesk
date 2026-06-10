@@ -1,7 +1,9 @@
 import { EMBED_COOKIE, makeEmbedCookieValue } from '../../../../lib/embed';
+import { getSql, ensureSchema, hasDb } from '../../../../lib/db';
 
 // Exchanges a Shopify App Bridge session token (JWT, HS256-signed with the app
-// secret) for our embed session cookie. Used by the embedded admin app.
+// secret) for our embed session cookie, and swaps it for an offline Admin API
+// access token (token exchange) which is stored in the DB for data lookups.
 
 function b64urlToBytes(s) {
   s = s.replace(/-/g, '+').replace(/_/g, '/');
@@ -39,6 +41,24 @@ async function verifySessionToken(token, secret, apiKey) {
   return payload;
 }
 
+async function exchangeForOfflineToken(shop, sessionToken) {
+  const res = await fetch(`https://${shop}/admin/oauth/access_token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      client_id: process.env.SHOPIFY_APP_KEY,
+      client_secret: process.env.SHOPIFY_APP_SECRET,
+      grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
+      subject_token: sessionToken,
+      subject_token_type: 'urn:ietf:params:oauth:token-type:id_token',
+      requested_token_type: 'urn:shopify:params:oauth:token-type:offline-access-token',
+    }),
+  });
+  if (!res.ok) throw new Error(`token exchange failed: ${res.status} ${await res.text()}`);
+  const json = await res.json();
+  return json.access_token;
+}
+
 export async function POST(req) {
   const auth = req.headers.get('authorization') || '';
   const token = auth.replace(/^Bearer\s+/i, '');
@@ -54,6 +74,24 @@ export async function POST(req) {
     });
   }
   const shop = payload.dest.replace(/^https:\/\//, '');
+
+  // Store/refresh the offline Admin API token for data lookups.
+  if (hasDb()) {
+    try {
+      const accessToken = await exchangeForOfflineToken(shop, token);
+      if (accessToken) {
+        await ensureSchema();
+        const sql = getSql();
+        await sql`
+          INSERT INTO shop_tokens (shop, token, updated_at)
+          VALUES (${shop}, ${accessToken}, now())
+          ON CONFLICT (shop) DO UPDATE SET token = EXCLUDED.token, updated_at = now()`;
+      }
+    } catch (e) {
+      console.error('Offline token exchange failed:', e.message);
+    }
+  }
+
   const cookieValue = await makeEmbedCookieValue(shop);
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,

@@ -16,6 +16,7 @@ export default async function CustomerPage({ params }) {
     SELECT * FROM tickets WHERE customer_email = ${email} ORDER BY updated_at DESC`;
   const notes = await sql`
     SELECT * FROM customer_notes WHERE email = ${email} ORDER BY created_at DESC`;
+  const shopifyOn = await shopifyConfigured();
   const [shopifyCustomer, orders] = await Promise.all([
     customerByEmail(email),
     recentOrdersByEmail(email),
@@ -102,12 +103,13 @@ export default async function CustomerPage({ params }) {
         <div>
           <div className="card">
             <h2>Shopify profile</h2>
-            {!shopifyConfigured() && (
+            {!shopifyOn && (
               <p className="muted">
-                Not connected — set <code>SHOPIFY_STORE</code> and <code>SHOPIFY_ADMIN_TOKEN</code>.
+                Not connected yet — open the helpdesk once inside your Shopify admin (Apps → DTF
+                Now Helpdesk) to link the store automatically.
               </p>
             )}
-            {shopifyConfigured() && !shopifyCustomer && (
+            {shopifyOn && !shopifyCustomer && (
               <p className="muted">No Shopify customer found for this email.</p>
             )}
             {shopifyCustomer && (
@@ -134,7 +136,7 @@ export default async function CustomerPage({ params }) {
           <div className="card">
             <h2>Recent orders</h2>
             {orders && orders.length === 0 && <p className="muted">No orders found.</p>}
-            {!orders && shopifyConfigured() && <p className="muted">—</p>}
+            {!orders && shopifyOn && <p className="muted">—</p>}
             {orders &&
               orders.map((o) => (
                 <div key={o.name} className="order-card">

@@ -25,6 +25,7 @@ export default async function TicketPage({ params }) {
   if (!ticket) notFound();
   const comments = await sql`
     SELECT * FROM comments WHERE ticket_id = ${id} ORDER BY created_at ASC`;
+  const shopifyOn = await shopifyConfigured();
   const orders = await recentOrdersByEmail(ticket.customer_email);
 
   return (
@@ -135,13 +136,13 @@ export default async function TicketPage({ params }) {
 
           <div className="card">
             <h2>Shopify orders</h2>
-            {!shopifyConfigured() && (
+            {!shopifyOn && (
               <p className="muted">
-                Not connected. Set <code>SHOPIFY_STORE</code> and <code>SHOPIFY_ADMIN_TOKEN</code>{' '}
-                env vars to show the customer&apos;s recent orders here.
+                Not connected yet — open the helpdesk once inside your Shopify admin (Apps → DTF
+                Now Helpdesk) to link the store automatically.
               </p>
             )}
-            {shopifyConfigured() && !ticket.customer_email && (
+            {shopifyOn && !ticket.customer_email && (
               <p className="muted">No customer email on this ticket.</p>
             )}
             {orders && orders.length === 0 && (
