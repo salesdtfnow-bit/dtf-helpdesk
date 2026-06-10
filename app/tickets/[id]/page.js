@@ -151,8 +151,10 @@ export default async function TicketPage({ params }) {
             {orders &&
               orders.map((o) => (
                 <div key={o.name} className="order-card">
-                  <strong>{o.name}</strong> ·{' '}
-                  {new Date(o.createdAt).toLocaleDateString('en-GB')} ·{' '}
+                  <a className="row-link" href={o.adminUrl} target="_blank" rel="noreferrer">
+                    {o.name}
+                  </a>{' '}
+                  · {new Date(o.createdAt).toLocaleDateString('en-GB')} ·{' '}
                   {o.totalPriceSet.shopMoney.amount} {o.totalPriceSet.shopMoney.currencyCode}
                   <br />
                   <span className="muted">
