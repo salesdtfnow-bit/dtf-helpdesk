@@ -1,18 +1,9 @@
-import { cookies } from 'next/headers';
-import { redirect } from 'next/navigation';
-import { EMBED_COOKIE, verifyEmbedCookieValue } from '../../lib/embed';
-
+// Entry point for the embedded Shopify admin app (managed install / token exchange).
+// Always obtains a fresh session token, exchanges it for our embed cookie and an
+// offline Admin API token (stored server-side), then opens the helpdesk.
 export const dynamic = 'force-dynamic';
 
-// Entry point for the embedded Shopify admin app (managed install / token exchange).
-// Loads App Bridge, obtains a session token, exchanges it for our embed cookie,
-// then navigates to the helpdesk inside the admin iframe.
-export default async function ShopifyEntry() {
-  const cookie = cookies().get(EMBED_COOKIE)?.value;
-  if (cookie && (await verifyEmbedCookieValue(cookie))) {
-    redirect('/tickets');
-  }
-
+export default function ShopifyEntry() {
   const apiKey = process.env.SHOPIFY_APP_KEY || '';
   return (
     <>
@@ -32,7 +23,7 @@ export default async function ShopifyEntry() {
   function msg(t) { if (el) el.textContent = t; }
   try {
     if (typeof shopify === 'undefined' || !shopify.idToken) {
-      msg('Open this app from inside your Shopify admin (Apps → DTF Now Helpdesk).');
+      msg('Open this app from inside your Shopify admin (Apps \\u2192 DTF Now Helpdesk).');
       return;
     }
     var token = await shopify.idToken();
