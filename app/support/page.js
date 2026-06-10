@@ -23,7 +23,7 @@ export default function SupportPage() {
           </div>
           <div>
             <label>Order number (optional)</label>
-            <input name="order_number" placeholder="#1234" />
+            <input name="order_number" placeholder="e.g. DTFN23303" />
           </div>
           <div>
             <label>What do you need help with?</label>
@@ -46,6 +46,14 @@ export default function SupportPage() {
               required
               placeholder="Describe the issue — for print quality problems, what happened during pressing (temperature, time, pressure) helps us help you faster."
             />
+          </div>
+          <div>
+            <label>Attach artwork / photos (optional)</label>
+            <input name="files" type="file" multiple accept="image/*,.pdf,.ai,.eps,.svg,.zip" />
+            <p className="muted" style={{ marginTop: 4 }}>
+              Needs your DTFN order number above — files are matched to your order automatically.
+              Max ~25 MB total.
+            </p>
           </div>
           <div>
             <button type="submit">Send</button>
