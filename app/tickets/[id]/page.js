@@ -10,9 +10,17 @@ import {
   agents,
 } from '../../../lib/db';
 import { recentOrdersByEmail, shopifyConfigured } from '../../../lib/shopify';
-import { assignAction, statusAction, commentAction } from '../../actions';
+import { reprintConfigured, getReprint, reprintTrackUrl } from '../../../lib/reprint';
+import { assignAction, statusAction, commentAction, raiseReprintAction } from '../../actions';
 
 export const dynamic = 'force-dynamic';
+
+const PROGRESS_LABELS = {
+  received: 'Received',
+  reprinting: 'Reprinting',
+  packed: 'Packed',
+  dispatched: 'Dispatched',
+};
 
 export default async function TicketPage({ params }) {
   if (!hasDb()) notFound();
@@ -27,6 +35,7 @@ export default async function TicketPage({ params }) {
     SELECT * FROM comments WHERE ticket_id = ${id} ORDER BY created_at ASC`;
   const shopifyOn = await shopifyConfigured();
   const orders = await recentOrdersByEmail(ticket.customer_email);
+  const reprint = ticket.reprint_id ? await getReprint(ticket.reprint_id) : null;
 
   return (
     <>
@@ -47,6 +56,9 @@ export default async function TicketPage({ params }) {
 
           <div className="card">
             <h2>Conversation</h2>
+            <p className="muted">
+              Replies (not internal notes) are emailed to the customer automatically.
+            </p>
             {comments.length === 0 && <p className="muted">No replies yet.</p>}
             {comments.map((c) => (
               <div key={c.id} className={`comment${c.internal ? ' internal' : ''}`}>
@@ -132,6 +144,70 @@ export default async function TicketPage({ params }) {
                 Update
               </button>
             </form>
+          </div>
+
+          <div className="card">
+            <h2>Reprint</h2>
+            {!reprintConfigured() && (
+              <p className="muted">
+                Not connected — set <code>REPRINT_APP_URL</code> and <code>REPRINT_API_KEY</code>.
+              </p>
+            )}
+            {reprintConfigured() && ticket.reprint_id && (
+              <>
+                {reprint ? (
+                  <p>
+                    <span className="badge open">{PROGRESS_LABELS[reprint.progress] || reprint.progress}</span>{' '}
+                    <span className="badge">{reprint.status}</span>
+                    {reprint.trackingNumber ? (
+                      <>
+                        <br />
+                        <span className="muted">
+                          {reprint.trackingCarrier || ''} {reprint.trackingNumber}
+                        </span>
+                      </>
+                    ) : null}
+                  </p>
+                ) : (
+                  <p className="muted">Linked, but status unavailable right now.</p>
+                )}
+                {ticket.reprint_token && (
+                  <p>
+                    <a
+                      className="row-link"
+                      href={reprintTrackUrl(ticket.reprint_token)}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Customer tracking page ↗
+                    </a>
+                  </p>
+                )}
+              </>
+            )}
+            {reprintConfigured() && !ticket.reprint_id && (
+              <form action={raiseReprintAction} className="stack">
+                <input type="hidden" name="id" value={ticket.id} />
+                {!ticket.order_number && (
+                  <p className="muted">
+                    No order number on this ticket — the reprint will be raised without a linked
+                    order.
+                  </p>
+                )}
+                <div className="inline-form">
+                  <select name="raisedBy" defaultValue={agents()[0]}>
+                    {agents().map((a) => (
+                      <option key={a}>{a}</option>
+                    ))}
+                  </select>
+                  <button type="submit">Raise reprint</button>
+                </div>
+                <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontWeight: 400 }}>
+                  <input type="checkbox" name="notify" defaultChecked style={{ width: 'auto' }} />{' '}
+                  Email customer their tracking link
+                </label>
+              </form>
+            )}
           </div>
 
           <div className="card">
