@@ -75,3 +75,16 @@ export async function commentAction(formData) {
   await sql`UPDATE tickets SET updated_at = now() WHERE id = ${id}`;
   revalidatePath(`/tickets/${id}`);
 }
+
+export async function customerNoteAction(formData) {
+  await ensureSchema();
+  const sql = getSql();
+  const email = String(formData.get('email') || '').trim();
+  const body = String(formData.get('body') || '').trim();
+  if (!email || !body) return;
+  await sql`
+    INSERT INTO customer_notes (email, author, body)
+    VALUES (${email}, ${String(formData.get('author') || 'Team').slice(0, 100)},
+            ${body.slice(0, 10000)})`;
+  revalidatePath(`/customers/${encodeURIComponent(email)}`);
+}

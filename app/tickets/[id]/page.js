@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import {
   getSql,
@@ -86,7 +87,16 @@ export default async function TicketPage({ params }) {
             <p className="muted">
               {ticket.customer_name || 'Unknown'}
               <br />
-              {ticket.customer_email || 'no email'}
+              {ticket.customer_email ? (
+                <Link
+                  className="row-link"
+                  href={`/customers/${encodeURIComponent(ticket.customer_email)}`}
+                >
+                  {ticket.customer_email}
+                </Link>
+              ) : (
+                'no email'
+              )}
               {ticket.order_number ? (
                 <>
                   <br />
