@@ -8,6 +8,7 @@ import { notifyAssigned, notifyStatus, notifySlack, appUrl } from '../lib/slack'
 import { sendCustomerEmail } from '../lib/email';
 import { createReprint, reprintConfigured } from '../lib/reprint';
 import { relayFilesToUploader, uploadsConfigured } from '../lib/uploads';
+import { sendWhatsAppText } from '../lib/whatsapp';
 
 export async function createTicketAction(formData) {
   const t = await createTicket({
@@ -164,4 +165,73 @@ export async function raiseReprintAction(formData) {
       VALUES (${id}, 'System', 'Reprint creation FAILED — check REPRINT_APP_URL / REPRINT_API_KEY and tracker logs.', true)`;
   }
   revalidatePath(`/tickets/${id}`);
+}
+
+// ---- WhatsApp live chat ----
+
+export async function sendWaAction(formData) {
+  await ensureSchema();
+  const sql = getSql();
+  const conversationId = Number(formData.get('conversation_id'));
+  const body = String(formData.get('body') || '').trim();
+  const author = String(formData.get('author') || 'Team').slice(0, 100);
+  if (!conversationId || !body) return;
+  const [conv] = await sql`SELECT * FROM wa_conversations WHERE id = ${conversationId}`;
+  if (!conv) return;
+  const result = await sendWhatsAppText(conv.wa_id, body);
+  const status = result.ok ? 'sent' : `failed: ${(result.error || '').slice(0, 200)}`;
+  await sql`INSERT INTO wa_messages (conversation_id, wa_message_id, direction, body, status, author)
+    VALUES (${conversationId}, ${result.id || ''}, 'out', ${body.slice(0, 4096)}, ${status}, ${author})`;
+  await sql`UPDATE wa_conversations SET last_message_at = now(), unread = 0 WHERE id = ${conversationId}`;
+  revalidatePath(`/whatsapp/${conversationId}`);
+  revalidatePath('/whatsapp');
+}
+
+export async function assignWaAction(formData) {
+  await ensureSchema();
+  const sql = getSql();
+  const conversationId = Number(formData.get('conversation_id'));
+  const assignee = String(formData.get('assignee') || '');
+  const [conv] = await sql`
+    UPDATE wa_conversations SET assignee = ${assignee} WHERE id = ${conversationId} RETURNING *`;
+  if (conv && assignee) {
+    const link = appUrl(`/whatsapp/${conversationId}`);
+    await notifySlack(
+      `:speech_balloon: WhatsApp chat with ${conv.name || conv.wa_id} assigned to *${assignee}*` +
+        (link ? `\n<${link}|Open chat>` : '')
+    );
+  }
+  revalidatePath(`/whatsapp/${conversationId}`);
+  revalidatePath('/whatsapp');
+}
+
+export async function waStatusAction(formData) {
+  await ensureSchema();
+  const sql = getSql();
+  const conversationId = Number(formData.get('conversation_id'));
+  const status = String(formData.get('status') || 'open');
+  if (!['open', 'closed'].includes(status)) return;
+  await sql`UPDATE wa_conversations SET status = ${status} WHERE id = ${conversationId}`;
+  revalidatePath(`/whatsapp/${conversationId}`);
+  revalidatePath('/whatsapp');
+}
+
+// ---- Canned replies ----
+
+export async function addCannedAction(formData) {
+  await ensureSchema();
+  const sql = getSql();
+  const title = String(formData.get('title') || '').trim().slice(0, 200);
+  const body = String(formData.get('body') || '').trim().slice(0, 5000);
+  if (!title || !body) return;
+  await sql`INSERT INTO canned_replies (title, body) VALUES (${title}, ${body})`;
+  revalidatePath('/canned');
+}
+
+export async function deleteCannedAction(formData) {
+  await ensureSchema();
+  const sql = getSql();
+  const id = Number(formData.get('id'));
+  if (id) await sql`DELETE FROM canned_replies WHERE id = ${id}`;
+  revalidatePath('/canned');
 }

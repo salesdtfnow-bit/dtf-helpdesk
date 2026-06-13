@@ -12,6 +12,7 @@ import {
 import { recentOrdersByEmail, shopifyConfigured } from '../../../lib/shopify';
 import { reprintConfigured, getReprint, reprintTrackUrl } from '../../../lib/reprint';
 import { assignAction, statusAction, commentAction, raiseReprintAction } from '../../actions';
+import CannedPicker from './CannedPicker';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,6 +34,7 @@ export default async function TicketPage({ params }) {
   if (!ticket) notFound();
   const comments = await sql`
     SELECT * FROM comments WHERE ticket_id = ${id} ORDER BY created_at ASC`;
+  const canned = await sql`SELECT id, title, body FROM canned_replies ORDER BY title ASC`;
   const shopifyOn = await shopifyConfigured();
   const orders = await recentOrdersByEmail(ticket.customer_email);
   const reprint = ticket.reprint_id ? await getReprint(ticket.reprint_id) : null;
@@ -73,7 +75,10 @@ export default async function TicketPage({ params }) {
               <input type="hidden" name="id" value={ticket.id} />
               <div>
                 <label>Reply / note</label>
-                <textarea name="body" required placeholder="Write a reply or internal note…" />
+                <div className="inline-form" style={{ marginBottom: 8 }}>
+                  <CannedPicker replies={canned} targetId="reply-body" />
+                </div>
+                <textarea id="reply-body" name="body" required placeholder="Write a reply or internal note…" />
               </div>
               <div className="inline-form">
                 <select name="author" defaultValue={agents()[0]}>
