@@ -2,10 +2,9 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { getSql, ensureSchema } from '../lib/db';
+import { getSql, ensureSchema, ticketRef } from '../lib/db';
 import { sendCustomerEmail } from '../lib/email';
 import { createTicket } from '../lib/tickets';
-import { notifySlack, appUrl } from '../lib/slack';
 
 export async function sendEmailReplyAction(formData) {
   await ensureSchema();
@@ -21,7 +20,7 @@ export async function sendEmailReplyAction(formData) {
     ORDER BY created_at DESC LIMIT 1`;
   const base = last?.subject || 'your message to DTF Now';
   const subject = /^re:/i.test(base) ? base : `Re: ${base}`;
-  const ok = await sendCustomerEmail({
+  await sendCustomerEmail({
     to: conv.email,
     subject,
     text: `${body}\n\n— ${author}, DTF Now Support`,
@@ -29,8 +28,37 @@ export async function sendEmailReplyAction(formData) {
   await sql`INSERT INTO email_messages (conversation_id, direction, subject, body, author)
     VALUES (${conversationId}, 'out', ${subject.slice(0, 300)}, ${body.slice(0, 20000)}, ${author})`;
   await sql`UPDATE email_conversations SET last_message_at = now(), unread = 0 WHERE id = ${conversationId}`;
-  if (!ok) await notifySlack(`:warning: Email reply to ${conv.email} failed to send (check RESEND_API_KEY / domain).`);
   revalidatePath(`/email/${conversationId}`);
+  revalidatePath('/email');
+}
+
+export async function emailFromTicketAction(formData) {
+  await ensureSchema();
+  const sql = getSql();
+  const ticketId = Number(formData.get('ticket_id'));
+  const body = String(formData.get('body') || '').trim();
+  const author = String(formData.get('author') || 'Team').slice(0, 100);
+  if (!ticketId || !body) return;
+  const [t] = await sql`SELECT * FROM tickets WHERE id = ${ticketId}`;
+  if (!t || !t.customer_email) return;
+  const email = t.customer_email.toLowerCase();
+  const [conv] = await sql`
+    INSERT INTO email_conversations (email, name, last_message_at, status)
+    VALUES (${email}, ${t.customer_name || ''}, now(), 'open')
+    ON CONFLICT (email) DO UPDATE SET last_message_at = now()
+    RETURNING *`;
+  const subject = `Re: [${ticketRef(t.id)}] ${t.subject}`;
+  await sendCustomerEmail({
+    to: email,
+    subject,
+    text: `${body}\n\n— ${author}, DTF Now Support`,
+  });
+  await sql`INSERT INTO email_messages (conversation_id, direction, subject, body, author)
+    VALUES (${conv.id}, 'out', ${subject.slice(0, 300)}, ${body.slice(0, 20000)}, ${author})`;
+  await sql`INSERT INTO comments (ticket_id, author, body, internal)
+    VALUES (${ticketId}, ${author}, ${('Emailed customer: ' + body).slice(0, 9000)}, true)`;
+  revalidatePath(`/tickets/${ticketId}`);
+  revalidatePath(`/email/${conv.id}`);
   revalidatePath('/email');
 }
 
@@ -39,15 +67,7 @@ export async function assignEmailAction(formData) {
   const sql = getSql();
   const conversationId = Number(formData.get('conversation_id'));
   const assignee = String(formData.get('assignee') || '');
-  const [conv] = await sql`
-    UPDATE email_conversations SET assignee = ${assignee} WHERE id = ${conversationId} RETURNING *`;
-  if (conv && assignee) {
-    const link = appUrl(`/email/${conversationId}`);
-    await notifySlack(
-      `:email: Email thread with ${conv.name || conv.email} assigned to *${assignee}*` +
-        (link ? `\n<${link}|Open email>` : '')
-    );
-  }
+  await sql`UPDATE email_conversations SET assignee = ${assignee} WHERE id = ${conversationId}`;
   revalidatePath(`/email/${conversationId}`);
   revalidatePath('/email');
 }
