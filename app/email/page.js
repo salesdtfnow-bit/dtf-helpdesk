@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { getSql, ensureSchema, hasDb } from '../../lib/db';
 import { getAgents } from '../../lib/auth';
 import { emailConfigured } from '../../lib/email';
-import AutoRefresh from '../whatsapp/AutoRefresh';
+import EmailSync from './EmailSync';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,6 +18,7 @@ export default async function EmailListPage({ searchParams }) {
   await ensureSchema();
   const sql = getSql();
   const agentList = await getAgents();
+  const inboundReady = !!(process.env.IONOS_IMAP_USER && process.env.IONOS_IMAP_PASSWORD);
   const filter = searchParams?.assignee || '';
   const convos = filter
     ? await sql`
@@ -29,13 +30,17 @@ export default async function EmailListPage({ searchParams }) {
 
   return (
     <>
-      <AutoRefresh seconds={15} />
+      <EmailSync seconds={20} />
       <h1>Email</h1>
-      {!emailConfigured() && (
+      {!inboundReady && (
         <p className="notice">
-          Outbound email not configured — set RESEND_API_KEY to send replies. Inbound email needs
-          SendGrid Inbound Parse pointed at /api/inbound-email.
+          Inbound email not connected yet — add IONOS_IMAP_USER and IONOS_IMAP_PASSWORD (and
+          optionally IONOS_IMAP_HOST) in Vercel, then redeploy. New mail to support@ will then sync
+          into this inbox.
         </p>
+      )}
+      {inboundReady && !emailConfigured() && (
+        <p className="notice">Outbound replies need RESEND_API_KEY set to send.</p>
       )}
       <div className="filters">
         <Link href="/email" className={!filter ? 'active' : ''}>

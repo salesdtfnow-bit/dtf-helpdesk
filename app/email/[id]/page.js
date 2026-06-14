@@ -11,7 +11,7 @@ import {
   deleteEmailConversationAction,
   createTicketFromEmailAction,
 } from '../../actions-email';
-import AutoRefresh from '../../whatsapp/AutoRefresh';
+import EmailSync from '../EmailSync';
 import MessageActions from '../../whatsapp/MessageActions';
 
 export const dynamic = 'force-dynamic';
@@ -30,7 +30,7 @@ export default async function EmailThreadPage({ params }) {
 
   return (
     <>
-      <AutoRefresh seconds={15} />
+      <EmailSync seconds={20} />
       <p className="muted">
         <Link className="row-link" href="/email">
           ← All emails
