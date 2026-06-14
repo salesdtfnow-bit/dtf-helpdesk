@@ -2,21 +2,21 @@ import { NextResponse } from 'next/server';
 import { EMBED_COOKIE, verifyEmbedCookieValue } from './lib/embed';
 import { STAFF_COOKIE, verifyStaffSession } from './lib/session';
 
-// Auth gate for the agent area. Public: the customer form, login, intake APIs,
-// and the Shopify embed entry. Everything else needs a staff session OR a valid
-// Shopify-embed session (the store owner opening the app inside Shopify admin).
-// /admin additionally requires admin role (embed = owner = admin).
 const PUBLIC = ['/login', '/support', '/thanks', '/shopify'];
 
 export async function middleware(req) {
   const { pathname } = req.nextUrl;
+  const requestHeaders = new Headers(req.headers);
+  requestHeaders.set('x-pathname', pathname);
+  const pass = () => NextResponse.next({ request: { headers: requestHeaders } });
+
   if (
     pathname.startsWith('/api/') ||
     pathname.startsWith('/_next/') ||
     pathname === '/favicon.ico' ||
     PUBLIC.some((p) => pathname === p || pathname.startsWith(p + '/'))
   ) {
-    return NextResponse.next();
+    return pass();
   }
 
   const embed = req.cookies.get(EMBED_COOKIE)?.value;
@@ -41,7 +41,7 @@ export async function middleware(req) {
     }
   }
 
-  return NextResponse.next();
+  return pass();
 }
 
 export const config = {
