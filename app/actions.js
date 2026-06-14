@@ -62,6 +62,18 @@ export async function publicTicketAction(formData) {
   redirect('/thanks');
 }
 
+export async function editTicketAction(formData) {
+  await ensureSchema();
+  const sql = getSql();
+  const id = Number(formData.get('id'));
+  const subject = String(formData.get('subject') || '').trim().slice(0, 300);
+  const description = String(formData.get('description') || '').slice(0, 10000);
+  if (!id || !subject) return;
+  await sql`UPDATE tickets SET subject = ${subject}, description = ${description}, updated_at = now() WHERE id = ${id}`;
+  revalidatePath(`/tickets/${id}`);
+  revalidatePath('/tickets');
+}
+
 export async function assignAction(formData) {
   await ensureSchema();
   const sql = getSql();
@@ -189,15 +201,7 @@ export async function assignWaAction(formData) {
   const sql = getSql();
   const conversationId = Number(formData.get('conversation_id'));
   const assignee = String(formData.get('assignee') || '');
-  const [conv] = await sql`
-    UPDATE wa_conversations SET assignee = ${assignee} WHERE id = ${conversationId} RETURNING *`;
-  if (conv && assignee) {
-    const link = appUrl(`/whatsapp/${conversationId}`);
-    await notifySlack(
-      `:speech_balloon: WhatsApp chat with ${conv.name || conv.wa_id} assigned to *${assignee}*` +
-        (link ? `\n<${link}|Open chat>` : '')
-    );
-  }
+  await sql`UPDATE wa_conversations SET assignee = ${assignee} WHERE id = ${conversationId}`;
   revalidatePath(`/whatsapp/${conversationId}`);
   revalidatePath('/whatsapp');
 }
@@ -261,6 +265,7 @@ export async function createTicketFromWaAction(formData) {
     customer_name: conv.name || '',
     assignee: conv.assignee || '',
   });
+  await sql`UPDATE tickets SET wa_conversation_id = ${conversationId} WHERE id = ${t.id}`;
   redirect(`/tickets/${t.id}`);
 }
 
