@@ -1,1 +1,0 @@
-WhatsApp control actions live in app/actions.js (deleteWaMessageAction, editWaMessageAction, deleteWaConversationAction, createTicketFromWaAction).
