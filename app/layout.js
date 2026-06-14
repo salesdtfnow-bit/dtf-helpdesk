@@ -1,6 +1,7 @@
 import './globals.css';
 import Link from 'next/link';
 import { currentUser } from '../lib/auth';
+import NavLinks from './NavLinks';
 
 export const metadata = {
   title: 'DTF Now Helpdesk',
@@ -15,25 +16,10 @@ export default async function RootLayout({ children }) {
       <body>
         <header className="topbar">
           <Link href="/tickets" className="brand">
+            <span className="brand-dot" />
             DTF Now <span>Helpdesk</span>
           </Link>
-          {user ? (
-            <nav>
-              <Link href="/tickets">Tickets</Link>
-              {waEnabled && <Link href="/whatsapp">WhatsApp</Link>}
-              <Link href="/email">Email</Link>
-              <Link href="/customers">Customers</Link>
-              <Link href="/canned">Canned</Link>
-              <Link href="/tickets/new">New ticket</Link>
-              {user.role === 'admin' && <Link href="/admin">Admin</Link>}
-              <span style={{ color: '#7ea6ff', marginLeft: 20, fontSize: 13 }}>{user.name}</span>
-              <a href="/api/auth/logout">Sign out</a>
-            </nav>
-          ) : (
-            <nav>
-              <Link href="/support">Customer form</Link>
-            </nav>
-          )}
+          <NavLinks user={user} waEnabled={waEnabled} />
         </header>
         <main>{children}</main>
       </body>
