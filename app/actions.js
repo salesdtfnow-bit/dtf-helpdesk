@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
+import { cookies } from 'next/headers';
 import { getSql, ensureSchema, ticketRef } from '../lib/db';
 import { createTicket } from '../lib/tickets';
 import { notifyAssigned, notifyStatus, notifySlack, appUrl } from '../lib/slack';
@@ -9,6 +10,8 @@ import { sendCustomerEmail } from '../lib/email';
 import { createReprint, reprintConfigured } from '../lib/reprint';
 import { relayFilesToUploader, uploadsConfigured } from '../lib/uploads';
 import { sendWhatsAppText } from '../lib/whatsapp';
+import { hashPassword, verifyPassword, requireAdmin } from '../lib/auth';
+import { makeStaffSession, STAFF_COOKIE } from '../lib/session';
 
 export async function createTicketAction(formData) {
   const t = await createTicket({
@@ -36,10 +39,7 @@ export async function publicTicketAction(formData) {
     order_number: formData.get('order_number'),
   });
 
-  // Relay any attached artwork to the Files Uploader (verifies order, stores in Drive).
-  const files = formData
-    .getAll('files')
-    .filter((f) => typeof f !== 'string' && f && f.size > 0);
+  const files = formData.getAll('files').filter((f) => typeof f !== 'string' && f && f.size > 0);
   if (files.length > 0) {
     const sql = getSql();
     if (!uploadsConfigured()) {
@@ -103,8 +103,6 @@ export async function commentAction(formData) {
     VALUES (${id}, ${author}, ${body.slice(0, 10000)}, ${internal})`;
   await sql`UPDATE tickets SET updated_at = now() WHERE id = ${id}`;
 
-  // Public replies are emailed to the customer (Resend). Their replies thread
-  // back in via /api/inbound-email matching the [DTF-xxxx] ref in the subject.
   if (!internal) {
     const [t] = await sql`SELECT * FROM tickets WHERE id = ${id}`;
     if (t?.customer_email) {
@@ -140,7 +138,6 @@ export async function raiseReprintAction(formData) {
   const [t] = await sql`SELECT * FROM tickets WHERE id = ${id}`;
   if (!t || t.reprint_id || !reprintConfigured()) return;
 
-  // Use the shop linked via the embedded app token (fallback: env).
   const rows = await sql`SELECT shop FROM shop_tokens ORDER BY updated_at DESC LIMIT 1`;
   const shop = rows[0]?.shop || `${(process.env.SHOPIFY_STORE || '').replace('.myshopify.com', '')}.myshopify.com`;
 
@@ -234,4 +231,85 @@ export async function deleteCannedAction(formData) {
   const id = Number(formData.get('id'));
   if (id) await sql`DELETE FROM canned_replies WHERE id = ${id}`;
   revalidatePath('/canned');
+}
+
+// ---- Auth ----
+
+export async function loginAction(formData) {
+  const email = String(formData.get('email') || '').trim().toLowerCase();
+  const password = String(formData.get('password') || '');
+  const nextRaw = String(formData.get('next') || '/tickets');
+  const next = nextRaw.startsWith('/') ? nextRaw : '/tickets';
+  await ensureSchema();
+  const sql = getSql();
+  const [s] = await sql`SELECT * FROM staff WHERE lower(email) = ${email} AND active = true`;
+  if (!s || !s.password_hash || !verifyPassword(password, s.password_hash)) {
+    redirect(`/login?error=1&next=${encodeURIComponent(next)}`);
+  }
+  const value = await makeStaffSession({ id: s.id, email: s.email, name: s.name, role: s.role });
+  cookies().set(STAFF_COOKIE, value, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'lax',
+    path: '/',
+    maxAge: 7 * 24 * 60 * 60,
+  });
+  redirect(next);
+}
+
+// ---- Staff management (admin only) ----
+
+export async function addStaffAction(formData) {
+  await requireAdmin();
+  await ensureSchema();
+  const sql = getSql();
+  const name = String(formData.get('name') || '').trim().slice(0, 100);
+  const email = String(formData.get('email') || '').trim().toLowerCase().slice(0, 200);
+  const role = String(formData.get('role') || 'agent') === 'admin' ? 'admin' : 'agent';
+  const slack_id = String(formData.get('slack_id') || '').trim().slice(0, 50);
+  const password = String(formData.get('password') || '');
+  if (!name || !email) return;
+  const password_hash = password ? hashPassword(password) : '';
+  await sql`
+    INSERT INTO staff (name, email, role, slack_id, password_hash)
+    VALUES (${name}, ${email}, ${role}, ${slack_id}, ${password_hash})
+    ON CONFLICT (email) DO UPDATE SET
+      name = EXCLUDED.name, role = EXCLUDED.role, slack_id = EXCLUDED.slack_id, active = true`;
+  revalidatePath('/admin');
+}
+
+export async function setStaffPasswordAction(formData) {
+  await requireAdmin();
+  const sql = getSql();
+  const id = Number(formData.get('id'));
+  const password = String(formData.get('password') || '');
+  if (!id || !password) return;
+  await sql`UPDATE staff SET password_hash = ${hashPassword(password)} WHERE id = ${id}`;
+  revalidatePath('/admin');
+}
+
+export async function setStaffActiveAction(formData) {
+  await requireAdmin();
+  const sql = getSql();
+  const id = Number(formData.get('id'));
+  const active = String(formData.get('active')) === 'true';
+  if (id) await sql`UPDATE staff SET active = ${active} WHERE id = ${id}`;
+  revalidatePath('/admin');
+}
+
+export async function setStaffRoleAction(formData) {
+  await requireAdmin();
+  const sql = getSql();
+  const id = Number(formData.get('id'));
+  const role = String(formData.get('role')) === 'admin' ? 'admin' : 'agent';
+  if (id) await sql`UPDATE staff SET role = ${role} WHERE id = ${id}`;
+  revalidatePath('/admin');
+}
+
+export async function deleteStaffAction(formData) {
+  const me = await requireAdmin();
+  const sql = getSql();
+  const id = Number(formData.get('id'));
+  if (id && id !== me.id) await sql`DELETE FROM staff WHERE id = ${id}`;
+  revalidatePath('/admin');
 }

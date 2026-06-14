@@ -1,9 +1,19 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { getSql, ensureSchema, hasDb, agents } from '../../../lib/db';
+import { getSql, ensureSchema, hasDb } from '../../../lib/db';
+import { getAgents } from '../../../lib/auth';
 import { whatsappConfigured } from '../../../lib/whatsapp';
-import { sendWaAction, assignWaAction, waStatusAction } from '../../actions';
+import {
+  sendWaAction,
+  assignWaAction,
+  waStatusAction,
+  deleteWaMessageAction,
+  editWaMessageAction,
+  deleteWaConversationAction,
+  createTicketFromWaAction,
+} from '../../actions';
 import AutoRefresh from '../AutoRefresh';
+import MessageActions from '../MessageActions';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,6 +27,7 @@ export default async function WaChatPage({ params }) {
   if (!conv) notFound();
   const messages = await sql`SELECT * FROM wa_messages WHERE conversation_id = ${id} ORDER BY created_at ASC`;
   await sql`UPDATE wa_conversations SET unread = 0 WHERE id = ${id}`;
+  const agentList = await getAgents();
 
   const lastInbound = conv.last_inbound_at ? new Date(conv.last_inbound_at) : null;
   const within24h = lastInbound && Date.now() - lastInbound.getTime() < 24 * 60 * 60 * 1000;
@@ -46,8 +57,15 @@ export default async function WaChatPage({ params }) {
                 <span className="meta">
                   {m.direction === 'out' ? m.author || 'Team' : conv.name || 'Customer'} ·{' '}
                   {new Date(m.created_at).toLocaleString('en-GB')}
+                  {m.edited ? ' · edited' : ''}
                   {m.direction === 'out' && m.status ? ` · ${m.status}` : ''}
                 </span>
+                <MessageActions
+                  id={m.id}
+                  body={m.body}
+                  editAction={editWaMessageAction}
+                  deleteAction={deleteWaMessageAction}
+                />
               </div>
             ))}
           </div>
@@ -68,8 +86,8 @@ export default async function WaChatPage({ params }) {
             <input type="hidden" name="conversation_id" value={conv.id} />
             <textarea name="body" required placeholder="Type a message…" />
             <div className="inline-form">
-              <select name="author" defaultValue={agents()[0]}>
-                {agents().map((a) => (
+              <select name="author" defaultValue={agentList[0]}>
+                {agentList.map((a) => (
                   <option key={a}>{a}</option>
                 ))}
               </select>
@@ -85,7 +103,7 @@ export default async function WaChatPage({ params }) {
               <input type="hidden" name="conversation_id" value={conv.id} />
               <select name="assignee" defaultValue={conv.assignee}>
                 <option value="">Unassigned</option>
-                {agents().map((a) => (
+                {agentList.map((a) => (
                   <option key={a}>{a}</option>
                 ))}
               </select>
@@ -105,6 +123,17 @@ export default async function WaChatPage({ params }) {
               <button type="submit" className="secondary">
                 Update
               </button>
+            </form>
+          </div>
+          <div className="card">
+            <h2>Actions</h2>
+            <form action={createTicketFromWaAction} style={{ marginBottom: 10 }}>
+              <input type="hidden" name="conversation_id" value={conv.id} />
+              <button type="submit">Create ticket from chat</button>
+            </form>
+            <form action={deleteWaConversationAction}>
+              <input type="hidden" name="conversation_id" value={conv.id} />
+              <button type="submit" className="secondary">Delete chat</button>
             </form>
           </div>
         </div>

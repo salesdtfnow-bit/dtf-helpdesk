@@ -1,5 +1,6 @@
 import Link from 'next/link';
-import { getSql, ensureSchema, hasDb, agents } from '../../lib/db';
+import { getSql, ensureSchema, hasDb } from '../../lib/db';
+import { getAgents } from '../../lib/auth';
 import { whatsappConfigured } from '../../lib/whatsapp';
 import AutoRefresh from './AutoRefresh';
 
@@ -16,6 +17,7 @@ export default async function WhatsAppListPage({ searchParams }) {
   }
   await ensureSchema();
   const sql = getSql();
+  const agentList = await getAgents();
   const filter = searchParams?.assignee || '';
   const convos = filter
     ? await sql`
@@ -39,7 +41,7 @@ export default async function WhatsAppListPage({ searchParams }) {
         <Link href="/whatsapp" className={!filter ? 'active' : ''}>
           All
         </Link>
-        {agents().map((a) => (
+        {agentList.map((a) => (
           <Link
             key={a}
             href={`/whatsapp?assignee=${encodeURIComponent(a)}`}
