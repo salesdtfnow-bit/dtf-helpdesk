@@ -26,6 +26,9 @@ export default async function EmailThreadPage({ params }) {
   if (!conv) notFound();
   const messages = await sql`SELECT * FROM email_messages WHERE conversation_id = ${id} ORDER BY created_at ASC`;
   await sql`UPDATE email_conversations SET unread = 0 WHERE id = ${id}`;
+  const att = await sql`SELECT id, email_message_id, filename FROM email_attachments WHERE conversation_id = ${id}`;
+  const attByMsg = {};
+  for (const a of att) (attByMsg[a.email_message_id] ||= []).push(a);
   const agentList = await getAgents();
 
   return (
@@ -51,6 +54,13 @@ export default async function EmailThreadPage({ params }) {
               <div key={m.id} className={`wa-msg ${m.direction === 'out' ? 'wa-out' : 'wa-in'}`}>
                 {m.subject ? <div style={{ fontWeight: 600, marginBottom: 4 }}>{m.subject}</div> : null}
                 {m.body}
+                {(attByMsg[m.id] || []).map((a) => (
+                  <span className="meta" key={a.id}>
+                    <a className="row-link" href={`/api/email/attachment/${a.id}`} target="_blank" rel="noreferrer">
+                      📎 {a.filename}
+                    </a>
+                  </span>
+                ))}
                 <span className="meta">
                   {m.direction === 'out' ? m.author || 'Team' : conv.name || conv.email} ·{' '}
                   {new Date(m.created_at).toLocaleString('en-GB')}

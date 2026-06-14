@@ -54,6 +54,13 @@ export default async function WaChatPage({ params }) {
             {messages.map((m) => (
               <div key={m.id} className={`wa-msg ${m.direction === 'out' ? 'wa-out' : 'wa-in'}`}>
                 {m.body}
+                {m.media_id ? (
+                  <span className="meta">
+                    <a className="row-link" href={`/api/whatsapp/media/${m.id}`} target="_blank" rel="noreferrer">
+                      ↓ Download {m.filename || 'file'}
+                    </a>
+                  </span>
+                ) : null}
                 <span className="meta">
                   {m.direction === 'out' ? m.author || 'Team' : conv.name || 'Customer'} ·{' '}
                   {new Date(m.created_at).toLocaleString('en-GB')}
@@ -107,9 +114,7 @@ export default async function WaChatPage({ params }) {
                   <option key={a}>{a}</option>
                 ))}
               </select>
-              <button type="submit" className="secondary">
-                Assign
-              </button>
+              <button type="submit" className="secondary">Assign</button>
             </form>
           </div>
           <div className="card">
@@ -120,9 +125,7 @@ export default async function WaChatPage({ params }) {
                 <option value="open">Open</option>
                 <option value="closed">Closed</option>
               </select>
-              <button type="submit" className="secondary">
-                Update
-              </button>
+              <button type="submit" className="secondary">Update</button>
             </form>
           </div>
           <div className="card">

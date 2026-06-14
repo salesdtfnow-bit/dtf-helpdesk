@@ -1,11 +1,9 @@
 import { NextResponse } from 'next/server';
 import { getSql, ensureSchema } from '../../../../lib/db';
-import { notifySlack, appUrl } from '../../../../lib/slack';
 import { verifyWhatsAppSignature } from '../../../../lib/whatsapp';
 
 export const dynamic = 'force-dynamic';
 
-// Meta webhook verification handshake.
 export async function GET(req) {
   const url = new URL(req.url);
   const mode = url.searchParams.get('hub.mode');
@@ -30,6 +28,16 @@ function extractText(m) {
   if (m.type === 'location') return '[location]';
   if (m.type === 'sticker') return '[sticker]';
   return `[${m.type || 'message'}]`;
+}
+
+function extractMedia(m) {
+  const t = m.type;
+  if (t === 'image') return { media_id: m.image?.id || '', media_type: 'image', filename: '' };
+  if (t === 'document') return { media_id: m.document?.id || '', media_type: 'document', filename: m.document?.filename || '' };
+  if (t === 'audio') return { media_id: m.audio?.id || '', media_type: 'audio', filename: '' };
+  if (t === 'video') return { media_id: m.video?.id || '', media_type: 'video', filename: '' };
+  if (t === 'sticker') return { media_id: m.sticker?.id || '', media_type: 'sticker', filename: '' };
+  return { media_id: '', media_type: '', filename: '' };
 }
 
 export async function POST(req) {
@@ -60,6 +68,7 @@ export async function POST(req) {
           if (!waId) continue;
           const name = nameByWaId[waId] || '';
           const text = extractText(m);
+          const media = extractMedia(m);
           const [conv] = await sql`
             INSERT INTO wa_conversations (wa_id, name, last_message_at, last_inbound_at, unread, status)
             VALUES (${waId}, ${name}, now(), now(), 1, 'open')
@@ -70,14 +79,8 @@ export async function POST(req) {
               status = 'open',
               name = CASE WHEN wa_conversations.name = '' THEN EXCLUDED.name ELSE wa_conversations.name END
             RETURNING *`;
-          await sql`INSERT INTO wa_messages (conversation_id, wa_message_id, direction, body, status)
-            VALUES (${conv.id}, ${m.id || ''}, 'in', ${text.slice(0, 4096)}, 'received')`;
-          const link = appUrl(`/whatsapp/${conv.id}`);
-          await notifySlack(
-            `:speech_balloon: *WhatsApp from ${name || waId}*\n${text.slice(0, 300)}` +
-              (conv.assignee ? `\n_assigned: ${conv.assignee}_` : '') +
-              (link ? `\n<${link}|Open chat>` : '')
-          );
+          await sql`INSERT INTO wa_messages (conversation_id, wa_message_id, direction, body, status, media_id, media_type, filename)
+            VALUES (${conv.id}, ${m.id || ''}, 'in', ${text.slice(0, 4096)}, 'received', ${media.media_id}, ${media.media_type}, ${media.filename})`;
         }
 
         for (const st of value.statuses || []) {

@@ -1,13 +1,9 @@
 import { NextResponse } from 'next/server';
 import { getSql, ensureSchema } from '../../../lib/db';
-import { notifySlack, appUrl } from '../../../lib/slack';
 
-// Inbound email intake. Feeds the Email inbox (one conversation per sender).
-// Does NOT auto-create tickets — staff raise a ticket from the email when needed.
-// If the subject carries a [DTF-xxxx] ref, the message is also threaded into that
-// ticket so ticket email replies stay complete.
-// Point your inbound email service (SendGrid Inbound Parse) at:
-//   POST /api/inbound-email?secret=INBOUND_SECRET
+// Optional SendGrid Inbound Parse intake (the IONOS IMAP sync is the primary
+// path). Feeds the Email inbox; threads [DTF-xxxx] replies into tickets. No
+// auto-ticket, no Slack ping (only new tickets ping Slack).
 
 function parseFrom(from) {
   const m = /^(.*?)\s*<([^>]+)>$/.exec((from || '').trim());
@@ -55,13 +51,6 @@ export async function POST(req) {
   await sql`INSERT INTO email_messages (conversation_id, direction, subject, body)
     VALUES (${conv.id}, 'in', ${(subject || '').slice(0, 300)}, ${(text || '').slice(0, 20000)})`;
 
-  const link = appUrl(`/email/${conv.id}`);
-  await notifySlack(
-    `:email: *Email from ${name || email}*\n${subject || '(no subject)'}\n${(text || '').slice(0, 200)}` +
-      (link ? `\n<${link}|Open email>` : '')
-  );
-
-  // Thread ticket replies (subject carries the ref) into the ticket too.
   const refMatch = /DTF-(\d{4,})/i.exec(subject);
   if (refMatch) {
     const ticketId = Number(refMatch[1]) - 1000;
