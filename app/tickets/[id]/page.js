@@ -1,17 +1,18 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import {
-  getSql,
-  ensureSchema,
-  hasDb,
-  ticketRef,
-  LABELS,
-  STATUSES,
-  agents,
-} from '../../../lib/db';
+import { getSql, ensureSchema, hasDb, ticketRef, LABELS, STATUSES } from '../../../lib/db';
+import { getAgents } from '../../../lib/auth';
 import { recentOrdersByEmail, shopifyConfigured } from '../../../lib/shopify';
 import { reprintConfigured, getReprint, reprintTrackUrl } from '../../../lib/reprint';
-import { assignAction, statusAction, commentAction, raiseReprintAction } from '../../actions';
+import {
+  assignAction,
+  statusAction,
+  commentAction,
+  raiseReprintAction,
+  editTicketAction,
+  sendWaAction,
+} from '../../actions';
+import { emailFromTicketAction } from '../../actions-email';
 import CannedPicker from './CannedPicker';
 
 export const dynamic = 'force-dynamic';
@@ -32,12 +33,31 @@ export default async function TicketPage({ params }) {
 
   const [ticket] = await sql`SELECT * FROM tickets WHERE id = ${id}`;
   if (!ticket) notFound();
-  const comments = await sql`
-    SELECT * FROM comments WHERE ticket_id = ${id} ORDER BY created_at ASC`;
+  const comments = await sql`SELECT * FROM comments WHERE ticket_id = ${id} ORDER BY created_at ASC`;
   const canned = await sql`SELECT id, title, body FROM canned_replies ORDER BY title ASC`;
+  const agentList = await getAgents();
   const shopifyOn = await shopifyConfigured();
   const orders = await recentOrdersByEmail(ticket.customer_email);
   const reprint = ticket.reprint_id ? await getReprint(ticket.reprint_id) : null;
+
+  const [waConv] = ticket.wa_conversation_id
+    ? await sql`SELECT * FROM wa_conversations WHERE id = ${ticket.wa_conversation_id}`
+    : [];
+  const waMessages = waConv
+    ? await sql`SELECT * FROM wa_messages WHERE conversation_id = ${waConv.id} ORDER BY created_at ASC`
+    : [];
+
+  const [emailConv] = ticket.customer_email
+    ? await sql`SELECT * FROM email_conversations WHERE lower(email) = ${ticket.customer_email.toLowerCase()}`
+    : [];
+  const emailMessages = emailConv
+    ? await sql`SELECT * FROM email_messages WHERE conversation_id = ${emailConv.id} ORDER BY created_at ASC`
+    : [];
+  const emailAtt = emailConv
+    ? await sql`SELECT id, email_message_id, filename FROM email_attachments WHERE conversation_id = ${emailConv.id}`
+    : [];
+  const attByMsg = {};
+  for (const a of emailAtt) (attByMsg[a.email_message_id] ||= []).push(a);
 
   return (
     <>
@@ -52,16 +72,27 @@ export default async function TicketPage({ params }) {
       <div className="grid">
         <div>
           <div className="card">
-            <h2>Description</h2>
-            <div className="desc">{ticket.description || '—'}</div>
+            <h2>Ticket</h2>
+            <form action={editTicketAction} className="stack">
+              <input type="hidden" name="id" value={ticket.id} />
+              <div>
+                <label>Subject</label>
+                <input name="subject" defaultValue={ticket.subject} required />
+              </div>
+              <div>
+                <label>Description</label>
+                <textarea name="description" defaultValue={ticket.description} />
+              </div>
+              <button type="submit" className="secondary">Save</button>
+            </form>
           </div>
 
           <div className="card">
-            <h2>Conversation</h2>
+            <h2>Notes &amp; replies</h2>
             <p className="muted">
-              Replies (not internal notes) are emailed to the customer automatically.
+              A reply (not an internal note) is emailed to the customer. Internal notes stay private.
             </p>
-            {comments.length === 0 && <p className="muted">No replies yet.</p>}
+            {comments.length === 0 && <p className="muted">Nothing yet.</p>}
             {comments.map((c) => (
               <div key={c.id} className={`comment${c.internal ? ' internal' : ''}`}>
                 <div className="meta">
@@ -81,8 +112,8 @@ export default async function TicketPage({ params }) {
                 <textarea id="reply-body" name="body" required placeholder="Write a reply or internal note…" />
               </div>
               <div className="inline-form">
-                <select name="author" defaultValue={agents()[0]}>
-                  {agents().map((a) => (
+                <select name="author" defaultValue={agentList[0]}>
+                  {agentList.map((a) => (
                     <option key={a}>{a}</option>
                   ))}
                 </select>
@@ -93,6 +124,86 @@ export default async function TicketPage({ params }) {
               </div>
             </form>
           </div>
+
+          {waConv && (
+            <div className="card">
+              <h2>WhatsApp conversation</h2>
+              <p className="muted">
+                Live chat with {waConv.name || `+${waConv.wa_id}`}. Messages here send on WhatsApp.
+              </p>
+              <div className="wa-thread" style={{ maxHeight: '40vh' }}>
+                {waMessages.map((m) => (
+                  <div key={m.id} className={`wa-msg ${m.direction === 'out' ? 'wa-out' : 'wa-in'}`}>
+                    {m.body}
+                    {m.media_id ? (
+                      <span className="meta">
+                        <a className="row-link" href={`/api/whatsapp/media/${m.id}`} target="_blank" rel="noreferrer">
+                          ↓ Download {m.filename || 'file'}
+                        </a>
+                      </span>
+                    ) : null}
+                    <span className="meta">
+                      {m.direction === 'out' ? m.author || 'Team' : waConv.name || 'Customer'} ·{' '}
+                      {new Date(m.created_at).toLocaleString('en-GB')}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <form action={sendWaAction} className="stack" style={{ marginTop: 12 }}>
+                <input type="hidden" name="conversation_id" value={waConv.id} />
+                <textarea name="body" required placeholder="Message on WhatsApp…" />
+                <div className="inline-form">
+                  <select name="author" defaultValue={agentList[0]}>
+                    {agentList.map((a) => (
+                      <option key={a}>{a}</option>
+                    ))}
+                  </select>
+                  <button type="submit">Send WhatsApp</button>
+                </div>
+              </form>
+            </div>
+          )}
+
+          {ticket.customer_email && (
+            <div className="card">
+              <h2>Email conversation</h2>
+              {emailConv && emailMessages.length > 0 ? (
+                <div className="wa-thread" style={{ maxHeight: '40vh' }}>
+                  {emailMessages.map((m) => (
+                    <div key={m.id} className={`wa-msg ${m.direction === 'out' ? 'wa-out' : 'wa-in'}`}>
+                      {m.subject ? <div style={{ fontWeight: 600, marginBottom: 4 }}>{m.subject}</div> : null}
+                      {m.body}
+                      {(attByMsg[m.id] || []).map((a) => (
+                        <span className="meta" key={a.id}>
+                          <a className="row-link" href={`/api/email/attachment/${a.id}`} target="_blank" rel="noreferrer">
+                            📎 {a.filename}
+                          </a>
+                        </span>
+                      ))}
+                      <span className="meta">
+                        {m.direction === 'out' ? m.author || 'Team' : emailConv.name || ticket.customer_email} ·{' '}
+                        {new Date(m.created_at).toLocaleString('en-GB')}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="muted">No emails with {ticket.customer_email} yet. Send one below.</p>
+              )}
+              <form action={emailFromTicketAction} className="stack" style={{ marginTop: 12 }}>
+                <input type="hidden" name="ticket_id" value={ticket.id} />
+                <textarea name="body" required placeholder="Email the customer…" />
+                <div className="inline-form">
+                  <select name="author" defaultValue={agentList[0]}>
+                    {agentList.map((a) => (
+                      <option key={a}>{a}</option>
+                    ))}
+                  </select>
+                  <button type="submit">Send email</button>
+                </div>
+              </form>
+            </div>
+          )}
         </div>
 
         <div>
@@ -106,10 +217,7 @@ export default async function TicketPage({ params }) {
               {ticket.customer_name || 'Unknown'}
               <br />
               {ticket.customer_email ? (
-                <Link
-                  className="row-link"
-                  href={`/customers/${encodeURIComponent(ticket.customer_email)}`}
-                >
+                <Link className="row-link" href={`/customers/${encodeURIComponent(ticket.customer_email)}`}>
                   {ticket.customer_email}
                 </Link>
               ) : (
@@ -127,13 +235,11 @@ export default async function TicketPage({ params }) {
               <input type="hidden" name="id" value={ticket.id} />
               <select name="assignee" defaultValue={ticket.assignee}>
                 <option value="">Unassigned</option>
-                {agents().map((a) => (
+                {agentList.map((a) => (
                   <option key={a}>{a}</option>
                 ))}
               </select>
-              <button type="submit" className="secondary">
-                Assign
-              </button>
+              <button type="submit" className="secondary">Assign</button>
             </form>
 
             <form action={statusAction} className="inline-form">
@@ -145,9 +251,7 @@ export default async function TicketPage({ params }) {
                   </option>
                 ))}
               </select>
-              <button type="submit" className="secondary">
-                Update
-              </button>
+              <button type="submit" className="secondary">Update</button>
             </form>
           </div>
 
@@ -178,12 +282,7 @@ export default async function TicketPage({ params }) {
                 )}
                 {ticket.reprint_token && (
                   <p>
-                    <a
-                      className="row-link"
-                      href={reprintTrackUrl(ticket.reprint_token)}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
+                    <a className="row-link" href={reprintTrackUrl(ticket.reprint_token)} target="_blank" rel="noreferrer">
                       Customer tracking page ↗
                     </a>
                   </p>
@@ -194,22 +293,18 @@ export default async function TicketPage({ params }) {
               <form action={raiseReprintAction} className="stack">
                 <input type="hidden" name="id" value={ticket.id} />
                 {!ticket.order_number && (
-                  <p className="muted">
-                    No order number on this ticket — the reprint will be raised without a linked
-                    order.
-                  </p>
+                  <p className="muted">No order number on this ticket — the reprint will be raised without a linked order.</p>
                 )}
                 <div className="inline-form">
-                  <select name="raisedBy" defaultValue={agents()[0]}>
-                    {agents().map((a) => (
+                  <select name="raisedBy" defaultValue={agentList[0]}>
+                    {agentList.map((a) => (
                       <option key={a}>{a}</option>
                     ))}
                   </select>
                   <button type="submit">Raise reprint</button>
                 </div>
                 <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontWeight: 400 }}>
-                  <input type="checkbox" name="notify" defaultChecked style={{ width: 'auto' }} />{' '}
-                  Email customer their tracking link
+                  <input type="checkbox" name="notify" defaultChecked style={{ width: 'auto' }} /> Email customer their tracking link
                 </label>
               </form>
             )}
@@ -219,16 +314,12 @@ export default async function TicketPage({ params }) {
             <h2>Shopify orders</h2>
             {!shopifyOn && (
               <p className="muted">
-                Not connected yet — open the helpdesk once inside your Shopify admin (Apps → DTF
-                Now Helpdesk) to link the store automatically.
+                Not connected yet — open the helpdesk once inside your Shopify admin (Apps → DTF Now
+                Helpdesk) to link the store automatically.
               </p>
             )}
-            {shopifyOn && !ticket.customer_email && (
-              <p className="muted">No customer email on this ticket.</p>
-            )}
-            {orders && orders.length === 0 && (
-              <p className="muted">No orders found for {ticket.customer_email}.</p>
-            )}
+            {shopifyOn && !ticket.customer_email && <p className="muted">No customer email on this ticket.</p>}
+            {orders && orders.length === 0 && <p className="muted">No orders found for {ticket.customer_email}.</p>}
             {orders &&
               orders.map((o) => (
                 <div key={o.name} className="order-card">
