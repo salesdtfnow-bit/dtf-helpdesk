@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server';
 
-// One-time setup + diagnostic: subscribes this app to the WhatsApp Business
-// Account so real inbound message webhooks are delivered (separate from the
-// app's webhook field config). Open this URL once after going live.
+// Setup + diagnostic: subscribes this app to the WhatsApp Business Account and
+// reports the phone number's Cloud API status (to detect a consumer-app
+// conflict, where the number is still registered on the WhatsApp app and
+// intercepts inbound messages before they reach the Cloud API webhook).
 const GRAPH = `https://graph.facebook.com/${process.env.WA_GRAPH_VERSION || 'v21.0'}`;
 const WABA = process.env.WHATSAPP_WABA_ID || '1545063060789460';
+const PHONE = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,14 +16,7 @@ export async function GET() {
     return NextResponse.json({ error: 'WHATSAPP_TOKEN not set' }, { status: 400 });
   }
   const auth = { Authorization: `Bearer ${token}` };
-  const out = { waba: WABA };
-
-  try {
-    const before = await fetch(`${GRAPH}/${WABA}/subscribed_apps`, { headers: auth });
-    out.before = await before.json().catch(() => ({}));
-  } catch (e) {
-    out.beforeError = e.message;
-  }
+  const out = { waba: WABA, phoneNumberId: PHONE };
 
   try {
     const sub = await fetch(`${GRAPH}/${WABA}/subscribed_apps`, { method: 'POST', headers: auth });
@@ -31,11 +26,16 @@ export async function GET() {
     out.subscribeError = e.message;
   }
 
-  try {
-    const after = await fetch(`${GRAPH}/${WABA}/subscribed_apps`, { headers: auth });
-    out.after = await after.json().catch(() => ({}));
-  } catch (e) {
-    out.afterError = e.message;
+  if (PHONE) {
+    try {
+      const fields =
+        'display_phone_number,verified_name,quality_rating,code_verification_status,platform_type,status,name_status,throughput';
+      const res = await fetch(`${GRAPH}/${PHONE}?fields=${fields}`, { headers: auth });
+      out.phoneStatus = res.status;
+      out.phone = await res.json().catch(() => ({}));
+    } catch (e) {
+      out.phoneError = e.message;
+    }
   }
 
   return NextResponse.json(out);
