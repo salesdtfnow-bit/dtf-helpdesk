@@ -9,6 +9,7 @@ export const metadata = {
 
 export default async function RootLayout({ children }) {
   const user = await currentUser();
+  const waEnabled = process.env.WHATSAPP_ENABLED === 'true';
   return (
     <html lang="en">
       <body>
@@ -19,7 +20,7 @@ export default async function RootLayout({ children }) {
           {user ? (
             <nav>
               <Link href="/tickets">Tickets</Link>
-              <Link href="/whatsapp">WhatsApp</Link>
+              {waEnabled && <Link href="/whatsapp">WhatsApp</Link>}
               <Link href="/email">Email</Link>
               <Link href="/customers">Customers</Link>
               <Link href="/canned">Canned</Link>
