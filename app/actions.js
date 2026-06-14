@@ -213,6 +213,57 @@ export async function waStatusAction(formData) {
   revalidatePath('/whatsapp');
 }
 
+export async function deleteWaMessageAction(formData) {
+  await ensureSchema();
+  const sql = getSql();
+  const id = Number(formData.get('id'));
+  if (!id) return;
+  const [m] = await sql`SELECT conversation_id FROM wa_messages WHERE id = ${id}`;
+  if (m) {
+    await sql`DELETE FROM wa_messages WHERE id = ${id}`;
+    revalidatePath(`/whatsapp/${m.conversation_id}`);
+  }
+}
+
+export async function editWaMessageAction(formData) {
+  await ensureSchema();
+  const sql = getSql();
+  const id = Number(formData.get('id'));
+  const body = String(formData.get('body') || '').trim();
+  if (!id || !body) return;
+  const [m] = await sql`UPDATE wa_messages SET body = ${body.slice(0, 4096)}, edited = true WHERE id = ${id} RETURNING conversation_id`;
+  if (m) revalidatePath(`/whatsapp/${m.conversation_id}`);
+}
+
+export async function deleteWaConversationAction(formData) {
+  await ensureSchema();
+  const sql = getSql();
+  const conversationId = Number(formData.get('conversation_id'));
+  if (conversationId) await sql`DELETE FROM wa_conversations WHERE id = ${conversationId}`;
+  revalidatePath('/whatsapp');
+  redirect('/whatsapp');
+}
+
+export async function createTicketFromWaAction(formData) {
+  await ensureSchema();
+  const sql = getSql();
+  const conversationId = Number(formData.get('conversation_id'));
+  const [conv] = await sql`SELECT * FROM wa_conversations WHERE id = ${conversationId}`;
+  if (!conv) return;
+  const [firstMsg] = await sql`
+    SELECT body FROM wa_messages WHERE conversation_id = ${conversationId} AND direction = 'in'
+    ORDER BY created_at ASC LIMIT 1`;
+  const t = await createTicket({
+    subject: `WhatsApp chat with ${conv.name || '+' + conv.wa_id}`,
+    description: firstMsg?.body || '',
+    channel: 'whatsapp',
+    category: 'other',
+    customer_name: conv.name || '',
+    assignee: conv.assignee || '',
+  });
+  redirect(`/tickets/${t.id}`);
+}
+
 // ---- Canned replies ----
 
 export async function addCannedAction(formData) {

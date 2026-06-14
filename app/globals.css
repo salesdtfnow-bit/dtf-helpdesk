@@ -108,7 +108,7 @@ button.secondary:hover { background: #e2e5ea; }
 pre.env { background: #101828; color: #d7e3f4; padding: 14px; border-radius: 8px; font-size: 13px; overflow-x: auto; }
 .desc { white-space: pre-wrap; font-size: 14px; line-height: 1.55; }
 
-/* WhatsApp live chat */
+/* WhatsApp / Email chat */
 .wa-conv { display: flex; justify-content: space-between; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: #fff; margin-bottom: 8px; text-decoration: none; color: var(--text); }
 .wa-conv:hover { border-color: #cfd6e0; }
 .wa-conv .snippet { color: var(--muted); font-size: 13px; margin-top: 3px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -118,3 +118,9 @@ pre.env { background: #101828; color: #d7e3f4; padding: 14px; border-radius: 8px
 .wa-in { align-self: flex-start; background: #eef1f5; border-bottom-left-radius: 3px; }
 .wa-out { align-self: flex-end; background: #dcf8c6; border-bottom-right-radius: 3px; }
 .wa-msg .meta { display: block; font-size: 11px; color: var(--muted); margin-top: 4px; }
+.msg-actions { display: block; margin-top: 4px; }
+.linkbtn { background: none; border: none; color: var(--muted); font-size: 11px; padding: 0 8px 0 0; margin: 0; cursor: pointer; width: auto; font-weight: 500; }
+.linkbtn:hover { color: var(--accent); background: none; text-decoration: underline; }
+.edit-form { margin-top: 6px; }
+.edit-form textarea { min-height: auto; font-size: 13px; }
+.edit-form span { display: inline-block; margin-top: 4px; }
