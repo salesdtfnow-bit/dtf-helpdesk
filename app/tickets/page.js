@@ -66,7 +66,7 @@ export default async function TicketsPage({ searchParams }) {
               {tickets.map((t) => (
                 <tr key={t.id}>
                   <td>
-                    <Link className="row-link" href={`/tickets/${t.id}`}>
+                    <Link className="row-link" href={`/tickets/${t.id}?status=${filter}`}>
                       {ticketRef(t.id)}
                     </Link>
                   </td>
