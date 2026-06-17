@@ -102,6 +102,18 @@ export async function editTicketAction(formData) {
   revalidatePath('/tickets');
 }
 
+export async function deleteTicketAction(formData) {
+  await requireAdmin();
+  await ensureSchema();
+  const sql = getSql();
+  const id = Number(formData.get('id'));
+  if (!id) return;
+  await sql`DELETE FROM comments WHERE ticket_id = ${id}`;
+  await sql`DELETE FROM tickets WHERE id = ${id}`;
+  revalidatePath('/tickets');
+  redirect('/tickets');
+}
+
 export async function assignAction(formData) {
   await ensureSchema();
   const sql = getSql();
