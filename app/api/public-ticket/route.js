@@ -34,8 +34,11 @@ export async function POST(req) {
   const customer_email = String(form.get('customer_email') || '').trim();
   const order_number = String(form.get('order_number') || '').trim();
   const category = String(form.get('category') || 'other');
-  if (!subject || !customer_email) {
-    return NextResponse.json({ ok: false, error: 'Subject and email are required.' }, { status: 400, headers: CORS });
+  if (!subject || !customer_email || !order_number) {
+    return NextResponse.json(
+      { ok: false, error: 'Subject, email and order number are required.' },
+      { status: 400, headers: CORS }
+    );
   }
 
   const t = await createTicket({
