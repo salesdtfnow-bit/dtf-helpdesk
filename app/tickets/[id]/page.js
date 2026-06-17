@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getSql, ensureSchema, hasDb, ticketRef, LABELS, STATUSES } from '../../../lib/db';
-import { getAgents } from '../../../lib/auth';
+import { getAgents, currentUser } from '../../../lib/auth';
 import { recentOrdersByEmail, shopifyConfigured } from '../../../lib/shopify';
 import { reprintConfigured, getReprint, reprintTrackUrl } from '../../../lib/reprint';
 import {
@@ -15,6 +15,7 @@ import {
 import { emailFromTicketAction } from '../../actions-email';
 import CannedPicker from './CannedPicker';
 import TicketNav from './TicketNav';
+import DeleteTicketButton from './DeleteTicketButton';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,6 +35,9 @@ export default async function TicketPage({ params, searchParams }) {
 
   const [ticket] = await sql`SELECT * FROM tickets WHERE id = ${id}`;
   if (!ticket) notFound();
+
+  const me = await currentUser();
+  const isAdmin = me?.role === 'admin';
 
   // Previous / next ticket for staff navigation — match the list view (updated_at DESC)
   // and stay within whatever status filter the staff were browsing.
@@ -278,6 +282,15 @@ export default async function TicketPage({ params, searchParams }) {
               </select>
               <button type="submit" className="secondary">Update</button>
             </form>
+
+            {isAdmin && (
+              <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
+                <DeleteTicketButton id={ticket.id} />
+                <p className="muted" style={{ marginTop: 6 }}>
+                  Permanently removes this ticket and its notes. Admins only.
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="card">
