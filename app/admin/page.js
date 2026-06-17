@@ -30,64 +30,66 @@ export default async function AdminPage() {
 
       <div className="card">
         <h2>Team</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Email</th>
-              <th>Role</th>
-              <th>Password</th>
-              <th>Status</th>
-              <th>Set password</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {staff.map((m) => (
-              <tr key={m.id}>
-                <td>{m.name}</td>
-                <td className="muted">{m.email}</td>
-                <td>
-                  <form action={setStaffRoleAction} className="inline-form">
-                    <input type="hidden" name="id" value={m.id} />
-                    <select name="role" defaultValue={m.role}>
-                      <option value="agent">Agent</option>
-                      <option value="admin">Admin</option>
-                    </select>
-                    <button type="submit" className="secondary">Save</button>
-                  </form>
-                </td>
-                <td>
-                  <span className={`badge ${m.has_password ? 'resolved' : 'urgent'}`}>
-                    {m.has_password ? 'Set' : 'Not set'}
-                  </span>
-                </td>
-                <td>
-                  <form action={setStaffActiveAction} className="inline-form">
-                    <input type="hidden" name="id" value={m.id} />
-                    <input type="hidden" name="active" value={(!m.active).toString()} />
-                    <button type="submit" className="secondary">
-                      {m.active ? 'Deactivate' : 'Activate'}
-                    </button>
-                  </form>
-                </td>
-                <td>
-                  <form action={setStaffPasswordAction} className="inline-form">
-                    <input type="hidden" name="id" value={m.id} />
-                    <input name="password" type="password" placeholder="New password" style={{ width: 140 }} />
-                    <button type="submit" className="secondary">Set</button>
-                  </form>
-                </td>
-                <td>
-                  <form action={deleteStaffAction}>
-                    <input type="hidden" name="id" value={m.id} />
-                    <button type="submit" className="secondary">Remove</button>
-                  </form>
-                </td>
+        <div className="table-scroll">
+          <table className="wide">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Role</th>
+                <th>Password</th>
+                <th>Status</th>
+                <th>Set password</th>
+                <th></th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {staff.map((m) => (
+                <tr key={m.id}>
+                  <td>{m.name}</td>
+                  <td className="muted nowrap">{m.email}</td>
+                  <td>
+                    <form action={setStaffRoleAction} className="inline-form">
+                      <input type="hidden" name="id" value={m.id} />
+                      <select name="role" defaultValue={m.role}>
+                        <option value="agent">Agent</option>
+                        <option value="admin">Admin</option>
+                      </select>
+                      <button type="submit" className="secondary">Save</button>
+                    </form>
+                  </td>
+                  <td>
+                    <span className={`badge ${m.has_password ? 'resolved' : 'urgent'}`}>
+                      {m.has_password ? 'Set' : 'Not set'}
+                    </span>
+                  </td>
+                  <td>
+                    <form action={setStaffActiveAction} className="inline-form">
+                      <input type="hidden" name="id" value={m.id} />
+                      <input type="hidden" name="active" value={(!m.active).toString()} />
+                      <button type="submit" className="secondary">
+                        {m.active ? 'Deactivate' : 'Activate'}
+                      </button>
+                    </form>
+                  </td>
+                  <td>
+                    <form action={setStaffPasswordAction} className="inline-form">
+                      <input type="hidden" name="id" value={m.id} />
+                      <input name="password" type="password" placeholder="New password" style={{ width: 150 }} />
+                      <button type="submit" className="secondary">Set</button>
+                    </form>
+                  </td>
+                  <td>
+                    <form action={deleteStaffAction}>
+                      <input type="hidden" name="id" value={m.id} />
+                      <button type="submit" className="secondary">Remove</button>
+                    </form>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div className="card">
