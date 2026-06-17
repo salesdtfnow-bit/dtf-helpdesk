@@ -14,6 +14,7 @@ import {
 } from '../../actions';
 import { emailFromTicketAction } from '../../actions-email';
 import CannedPicker from './CannedPicker';
+import TicketNav from './TicketNav';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,7 +25,7 @@ const PROGRESS_LABELS = {
   dispatched: 'Dispatched',
 };
 
-export default async function TicketPage({ params }) {
+export default async function TicketPage({ params, searchParams }) {
   if (!hasDb()) notFound();
   await ensureSchema();
   const sql = getSql();
@@ -33,6 +34,25 @@ export default async function TicketPage({ params }) {
 
   const [ticket] = await sql`SELECT * FROM tickets WHERE id = ${id}`;
   if (!ticket) notFound();
+
+  // Previous / next ticket for staff navigation — match the list view (updated_at DESC)
+  // and stay within whatever status filter the staff were browsing.
+  const filter = searchParams?.status || 'active';
+  const scope =
+    filter === 'all'
+      ? sql``
+      : filter === 'active'
+      ? sql`AND status IN ('open','in_progress','waiting')`
+      : sql`AND status = ${filter}`;
+  const [prevTicket] = await sql`
+    SELECT id FROM tickets
+    WHERE (updated_at, id) > (${ticket.updated_at}, ${ticket.id}) ${scope}
+    ORDER BY updated_at ASC, id ASC LIMIT 1`;
+  const [nextTicket] = await sql`
+    SELECT id FROM tickets
+    WHERE (updated_at, id) < (${ticket.updated_at}, ${ticket.id}) ${scope}
+    ORDER BY updated_at DESC, id DESC LIMIT 1`;
+
   const comments = await sql`SELECT * FROM comments WHERE ticket_id = ${id} ORDER BY created_at ASC`;
   const canned = await sql`SELECT id, title, body FROM canned_replies ORDER BY title ASC`;
   const agentList = await getAgents();
@@ -61,13 +81,18 @@ export default async function TicketPage({ params }) {
 
   return (
     <>
-      <h1>
-        {ticketRef(ticket.id)} — {ticket.subject}
-      </h1>
-      <p className="muted">
-        {LABELS[ticket.category]} · via {LABELS[ticket.channel]} · created{' '}
-        {new Date(ticket.created_at).toLocaleString('en-GB')}
-      </p>
+      <div className="ticket-head">
+        <div>
+          <h1>
+            {ticketRef(ticket.id)} — {ticket.subject}
+          </h1>
+          <p className="muted">
+            {LABELS[ticket.category]} · via {LABELS[ticket.channel]} · created{' '}
+            {new Date(ticket.created_at).toLocaleString('en-GB')}
+          </p>
+        </div>
+        <TicketNav prevId={prevTicket?.id} nextId={nextTicket?.id} status={filter} />
+      </div>
 
       <div className="grid">
         <div>
