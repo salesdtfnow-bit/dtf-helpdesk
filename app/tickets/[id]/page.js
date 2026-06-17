@@ -40,22 +40,27 @@ export default async function TicketPage({ params, searchParams }) {
   const isAdmin = me?.role === 'admin';
 
   // Previous / next ticket for staff navigation — match the list view (updated_at DESC)
-  // and stay within whatever status filter the staff were browsing.
+  // and stay within whatever status filter the staff were browsing. The comparison runs
+  // entirely in SQL (via a CTE) against the row's own timestamp: round-tripping updated_at
+  // through JS truncates Postgres microseconds to milliseconds, which made a ticket match
+  // itself and broke the "previous" button.
   const filter = searchParams?.status || 'active';
   const scope =
     filter === 'all'
       ? sql``
       : filter === 'active'
-      ? sql`AND status IN ('open','in_progress','waiting')`
-      : sql`AND status = ${filter}`;
+      ? sql`AND t.status IN ('open','in_progress','waiting')`
+      : sql`AND t.status = ${filter}`;
   const [prevTicket] = await sql`
-    SELECT id FROM tickets
-    WHERE (updated_at, id) > (${ticket.updated_at}, ${ticket.id}) ${scope}
-    ORDER BY updated_at ASC, id ASC LIMIT 1`;
+    WITH c AS (SELECT updated_at, id FROM tickets WHERE id = ${id})
+    SELECT t.id FROM tickets t, c
+    WHERE (t.updated_at, t.id) > (c.updated_at, c.id) ${scope}
+    ORDER BY t.updated_at ASC, t.id ASC LIMIT 1`;
   const [nextTicket] = await sql`
-    SELECT id FROM tickets
-    WHERE (updated_at, id) < (${ticket.updated_at}, ${ticket.id}) ${scope}
-    ORDER BY updated_at DESC, id DESC LIMIT 1`;
+    WITH c AS (SELECT updated_at, id FROM tickets WHERE id = ${id})
+    SELECT t.id FROM tickets t, c
+    WHERE (t.updated_at, t.id) < (c.updated_at, c.id) ${scope}
+    ORDER BY t.updated_at DESC, t.id DESC LIMIT 1`;
 
   const comments = await sql`SELECT * FROM comments WHERE ticket_id = ${id} ORDER BY created_at ASC`;
   const canned = await sql`SELECT id, title, body FROM canned_replies ORDER BY title ASC`;
