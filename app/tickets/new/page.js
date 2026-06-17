@@ -3,11 +3,17 @@ import { createTicketAction } from '../../actions';
 
 export const dynamic = 'force-dynamic';
 
-export default function NewTicketPage() {
+export default function NewTicketPage({ searchParams }) {
+  const orderError = searchParams?.error === 'order';
   return (
     <>
       <h1>New ticket</h1>
       <div className="card">
+        {orderError && (
+          <div className="notice" style={{ marginBottom: 16 }}>
+            A Shopify order number is required to raise a ticket.
+          </div>
+        )}
         <form action={createTicketAction} className="stack">
           <div>
             <label>Subject</label>
@@ -46,8 +52,15 @@ export default function NewTicketPage() {
             <input name="customer_email" type="email" />
           </div>
           <div>
-            <label>Shopify order number (optional)</label>
-            <input name="order_number" placeholder="#1234" />
+            <label>Shopify order number</label>
+            <input name="order_number" required placeholder="e.g. DTFN26341" />
+          </div>
+          <div>
+            <label>Attach files (optional)</label>
+            <input name="files" type="file" multiple accept="image/*,.pdf,.ai,.eps,.svg,.zip" />
+            <p className="muted" style={{ marginTop: 4 }}>
+              Artwork or photos — matched to the order number above. Max ~25 MB total.
+            </p>
           </div>
           <div>
             <label>Assign to</label>
