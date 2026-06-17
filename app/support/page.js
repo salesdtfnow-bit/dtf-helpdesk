@@ -1,5 +1,6 @@
 import { CATEGORIES, LABELS } from '../../lib/db';
 import { publicTicketAction } from '../actions';
+import SubmitButton from '../SubmitButton';
 
 export const dynamic = 'force-dynamic';
 
@@ -61,7 +62,7 @@ export default function SupportPage({ searchParams }) {
             </p>
           </div>
           <div>
-            <button type="submit">Send</button>
+            <SubmitButton pendingText="Sending…">Send</SubmitButton>
           </div>
         </form>
       </div>
