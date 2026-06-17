@@ -1,5 +1,6 @@
 import { CATEGORIES, PRIORITIES, LABELS, agents } from '../../../lib/db';
 import { createTicketAction } from '../../actions';
+import SubmitButton from '../../SubmitButton';
 
 export const dynamic = 'force-dynamic';
 
@@ -73,7 +74,7 @@ export default function NewTicketPage({ searchParams }) {
           </div>
           <input type="hidden" name="channel" value="manual" />
           <div>
-            <button type="submit">Create ticket</button>
+            <SubmitButton pendingText="Creating ticket…">Create ticket</SubmitButton>
           </div>
         </form>
       </div>
