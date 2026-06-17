@@ -14,6 +14,9 @@ import { hashPassword, verifyPassword, requireAdmin } from '../lib/auth';
 import { makeStaffSession, STAFF_COOKIE } from '../lib/session';
 
 export async function createTicketAction(formData) {
+  const order_number = String(formData.get('order_number') || '').trim();
+  if (!order_number) redirect('/tickets/new?error=order');
+
   const t = await createTicket({
     subject: formData.get('subject'),
     description: formData.get('description'),
@@ -22,13 +25,38 @@ export async function createTicketAction(formData) {
     channel: formData.get('channel') || 'manual',
     customer_name: formData.get('customer_name'),
     customer_email: formData.get('customer_email'),
-    order_number: formData.get('order_number'),
+    order_number,
     assignee: formData.get('assignee'),
   });
+
+  const files = formData.getAll('files').filter((f) => typeof f !== 'string' && f && f.size > 0);
+  if (files.length > 0) {
+    const sql = getSql();
+    if (!uploadsConfigured()) {
+      await sql`INSERT INTO comments (ticket_id, author, body, internal)
+        VALUES (${t.id}, 'System', ${'Staff attached ' + files.length + ' file(s) but UPLOAD_APP_URL is not configured — files were NOT stored.'}, true)`;
+    } else {
+      const result = await relayFilesToUploader({
+        name: String(formData.get('customer_name') || ''),
+        email: String(formData.get('customer_email') || ''),
+        orderNumber: order_number,
+        files,
+      });
+      const body = result.ok
+        ? `Uploaded ${result.fileNames?.length || files.length} file(s) to Files Uploader (order ${result.orderName || order_number}): ${(result.fileNames || []).join(', ')} — saved to Google Drive.`
+        : `Attached ${files.length} file(s) but the Files Uploader rejected them: ${result.error || 'unknown error'}.`;
+      await sql`INSERT INTO comments (ticket_id, author, body, internal)
+        VALUES (${t.id}, 'System', ${body.slice(0, 5000)}, ${!result.ok})`;
+    }
+  }
+
   redirect(`/tickets/${t.id}`);
 }
 
 export async function publicTicketAction(formData) {
+  const order_number = String(formData.get('order_number') || '').trim();
+  if (!order_number) redirect('/support?error=order');
+
   const t = await createTicket({
     subject: formData.get('subject'),
     description: formData.get('description'),
@@ -36,7 +64,7 @@ export async function publicTicketAction(formData) {
     channel: 'form',
     customer_name: formData.get('customer_name'),
     customer_email: formData.get('customer_email'),
-    order_number: formData.get('order_number'),
+    order_number,
   });
 
   const files = formData.getAll('files').filter((f) => typeof f !== 'string' && f && f.size > 0);
@@ -49,11 +77,11 @@ export async function publicTicketAction(formData) {
       const result = await relayFilesToUploader({
         name: String(formData.get('customer_name') || ''),
         email: String(formData.get('customer_email') || ''),
-        orderNumber: String(formData.get('order_number') || ''),
+        orderNumber: order_number,
         files,
       });
       const body = result.ok
-        ? `Customer uploaded ${result.fileNames?.length || files.length} file(s) via Files Uploader (order ${result.orderName || formData.get('order_number')}): ${(result.fileNames || []).join(', ')} — saved to Google Drive, order tagged files-uploaded.`
+        ? `Customer uploaded ${result.fileNames?.length || files.length} file(s) via Files Uploader (order ${result.orderName || order_number}): ${(result.fileNames || []).join(', ')} — saved to Google Drive, order tagged files-uploaded.`
         : `Customer attached ${files.length} file(s) but the Files Uploader rejected them: ${result.error || 'unknown error'}. Ask the customer to use the upload page directly.`;
       await sql`INSERT INTO comments (ticket_id, author, body, internal)
         VALUES (${t.id}, 'System', ${body.slice(0, 5000)}, ${!result.ok})`;
