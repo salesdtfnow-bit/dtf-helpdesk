@@ -100,6 +100,25 @@ h2 { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; margin: 0 0 14p
   overflow-wrap: anywhere;
 }
 
+/* ---- Ticket header + prev/next nav ---- */
+.ticket-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.ticket-head h1 { margin-bottom: 6px; }
+.ticket-head p { margin: 0; }
+.ticket-nav { display: flex; gap: 6px; flex-shrink: 0; }
+.ticket-nav button {
+  width: 40px; height: 40px; padding: 0;
+  font-size: 18px; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.ticket-nav button:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
+.ticket-nav button:disabled:hover { background: #f0f2f6; box-shadow: none; }
+
 /* ---- Tables ---- */
 table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 14px; }
 th {
