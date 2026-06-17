@@ -3,15 +3,21 @@ import { publicTicketAction } from '../actions';
 
 export const dynamic = 'force-dynamic';
 
-export default function SupportPage() {
+export default function SupportPage({ searchParams }) {
+  const orderError = searchParams?.error === 'order';
   return (
     <>
       <h1>Contact DTF Now support</h1>
       <p className="muted">
-        Tell us what&apos;s wrong and we&apos;ll get back to you as soon as possible. If it&apos;s
-        about an order, include your order number (it&apos;s in your confirmation email).
+        Tell us what&apos;s wrong and we&apos;ll get back to you as soon as possible. Please include
+        your DTFN order number — it&apos;s in your order confirmation email.
       </p>
       <div className="card">
+        {orderError && (
+          <div className="notice" style={{ marginBottom: 16 }}>
+            Please enter your DTFN order number so we can find your order.
+          </div>
+        )}
         <form action={publicTicketAction} className="stack">
           <div>
             <label>Your name</label>
@@ -22,8 +28,8 @@ export default function SupportPage() {
             <input name="customer_email" type="email" required />
           </div>
           <div>
-            <label>Order number (optional)</label>
-            <input name="order_number" placeholder="e.g. DTFN23303" />
+            <label>Order number</label>
+            <input name="order_number" required placeholder="e.g. DTFN23303" />
           </div>
           <div>
             <label>What do you need help with?</label>
@@ -51,8 +57,7 @@ export default function SupportPage() {
             <label>Attach artwork / photos (optional)</label>
             <input name="files" type="file" multiple accept="image/*,.pdf,.ai,.eps,.svg,.zip" />
             <p className="muted" style={{ marginTop: 4 }}>
-              Needs your DTFN order number above — files are matched to your order automatically.
-              Max ~25 MB total.
+              Files are matched to your order automatically. Max ~25 MB total.
             </p>
           </div>
           <div>
