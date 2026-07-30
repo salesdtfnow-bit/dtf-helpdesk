@@ -55,10 +55,14 @@ export default function SupportPage({ searchParams }) {
             />
           </div>
           <div>
-            <label>Attach artwork / photos (optional)</label>
-            <input name="files" type="file" multiple accept="image/*,.pdf,.ai,.eps,.svg,.zip" />
+            <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontWeight: 400 }}>
+              <input type="checkbox" name="needs_files" style={{ width: 'auto' }} /> I need to send
+              artwork or photos
+            </label>
             <p className="muted" style={{ marginTop: 4 }}>
-              Files are matched to your order automatically. Max ~25 MB total.
+              Tick this and we&apos;ll take you to our secure upload page next — up to 50 MB per
+              file, and it matches the files to your order automatically (you&apos;ll need your
+              order number).
             </p>
           </div>
           <div>
