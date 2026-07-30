@@ -4,11 +4,13 @@ import { getSql, ensureSchema, hasDb, ticketRef, LABELS, STATUSES } from '../../
 import { getAgents, currentUser } from '../../../lib/auth';
 import { recentOrdersByEmail, shopifyConfigured } from '../../../lib/shopify';
 import { reprintConfigured, getReprint, reprintTrackUrl } from '../../../lib/reprint';
+import { customerFiles } from '../../../lib/uploads';
 import {
   assignAction,
   statusAction,
   commentAction,
   raiseReprintAction,
+  requestFilesAction,
   editTicketAction,
   sendWaAction,
 } from '../../actions';
@@ -25,6 +27,13 @@ const PROGRESS_LABELS = {
   packed: 'Packed',
   dispatched: 'Dispatched',
 };
+
+function fileSize(bytes) {
+  const n = Number(bytes) || 0;
+  return n >= 1024 * 1024
+    ? `${(n / (1024 * 1024)).toFixed(1)} MB`
+    : `${Math.max(1, Math.round(n / 1024))} KB`;
+}
 
 export default async function TicketPage({ params, searchParams }) {
   if (!hasDb()) notFound();
@@ -68,6 +77,10 @@ export default async function TicketPage({ params, searchParams }) {
   const shopifyOn = await shopifyConfigured();
   const orders = await recentOrdersByEmail(ticket.customer_email);
   const reprint = ticket.reprint_id ? await getReprint(ticket.reprint_id) : null;
+  const uploadsOn = !!(process.env.UPLOAD_APP_URL && process.env.UPLOAD_API_KEY);
+  const uploaded = uploadsOn
+    ? await customerFiles({ orderNumber: ticket.order_number, email: ticket.customer_email })
+    : null;
 
   const [waConv] = ticket.wa_conversation_id
     ? await sql`SELECT * FROM wa_conversations WHERE id = ${ticket.wa_conversation_id}`
@@ -295,6 +308,40 @@ export default async function TicketPage({ params, searchParams }) {
                   Permanently removes this ticket and its notes. Admins only.
                 </p>
               </div>
+            )}
+          </div>
+
+          <div className="card">
+            <h2>Customer files</h2>
+            {!uploadsOn && (
+              <p className="muted">
+                Not connected — set <code>UPLOAD_APP_URL</code> and <code>UPLOAD_API_KEY</code>.
+              </p>
+            )}
+            {uploadsOn && !uploaded && <p className="muted">Couldn&apos;t reach the uploader right now.</p>}
+            {uploaded && uploaded.length === 0 && <p className="muted">Nothing uploaded yet.</p>}
+            {(uploaded || []).map((f) => (
+              <div key={f.id} className="order-card">
+                <a className="row-link" href={f.driveLink} target="_blank" rel="noreferrer">
+                  {f.fileName}
+                </a>
+                <br />
+                <span className="muted">
+                  {f.orderNumber || 'no order'} · {fileSize(f.fileSize)}
+                  {f.createdAt ? ` · ${new Date(f.createdAt).toLocaleString('en-GB')}` : ''}
+                </span>
+              </div>
+            ))}
+            {ticket.customer_email && (
+              <form action={requestFilesAction} className="inline-form" style={{ marginTop: 10 }}>
+                <input type="hidden" name="id" value={ticket.id} />
+                <select name="author" defaultValue={agentList[0]}>
+                  {agentList.map((a) => (
+                    <option key={a}>{a}</option>
+                  ))}
+                </select>
+                <button type="submit" className="secondary">Email upload link</button>
+              </form>
             )}
           </div>
 
