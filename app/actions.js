@@ -8,7 +8,7 @@ import { createTicket } from '../lib/tickets';
 import { notifyAssigned, notifyStatus, notifySlack, appUrl } from '../lib/slack';
 import { sendCustomerEmail } from '../lib/email';
 import { createReprint, reprintConfigured } from '../lib/reprint';
-import { relayFilesToUploader, uploadsConfigured } from '../lib/uploads';
+import { relayFilesToUploader, uploadsConfigured, uploadPageUrl } from '../lib/uploads';
 import { sendWhatsAppText } from '../lib/whatsapp';
 import { hashPassword, verifyPassword, requireAdmin } from '../lib/auth';
 import { makeStaffSession, STAFF_COOKIE } from '../lib/session';
@@ -57,7 +57,7 @@ export async function publicTicketAction(formData) {
   const order_number = String(formData.get('order_number') || '').trim();
   if (!order_number) redirect('/support?error=order');
 
-  const t = await createTicket({
+  await createTicket({
     subject: formData.get('subject'),
     description: formData.get('description'),
     category: formData.get('category'),
@@ -67,27 +67,9 @@ export async function publicTicketAction(formData) {
     order_number,
   });
 
-  const files = formData.getAll('files').filter((f) => typeof f !== 'string' && f && f.size > 0);
-  if (files.length > 0) {
-    const sql = getSql();
-    if (!uploadsConfigured()) {
-      await sql`INSERT INTO comments (ticket_id, author, body, internal)
-        VALUES (${t.id}, 'System', ${'Customer attached ' + files.length + ' file(s) but UPLOAD_APP_URL is not configured — files were NOT stored.'}, true)`;
-    } else {
-      const result = await relayFilesToUploader({
-        name: String(formData.get('customer_name') || ''),
-        email: String(formData.get('customer_email') || ''),
-        orderNumber: order_number,
-        files,
-      });
-      const body = result.ok
-        ? `Customer uploaded ${result.fileNames?.length || files.length} file(s) via Files Uploader (order ${result.orderName || order_number}): ${(result.fileNames || []).join(', ')} — saved to Google Drive, order tagged files-uploaded.`
-        : `Customer attached ${files.length} file(s) but the Files Uploader rejected them: ${result.error || 'unknown error'}. Ask the customer to use the upload page directly.`;
-      await sql`INSERT INTO comments (ticket_id, author, body, internal)
-        VALUES (${t.id}, 'System', ${body.slice(0, 5000)}, ${!result.ok})`;
-    }
-  }
-  redirect('/thanks');
+  // Customer artwork never travels through the helpdesk — Vercel caps serverless request
+  // bodies at ~4.5 MB. Send them to the Files Uploader instead (50 MB per file).
+  redirect(formData.get('needs_files') === 'on' ? '/thanks?upload=1' : '/thanks');
 }
 
 export async function editTicketAction(formData) {
@@ -213,6 +195,36 @@ export async function raiseReprintAction(formData) {
     await sql`INSERT INTO comments (ticket_id, author, body, internal)
       VALUES (${id}, 'System', 'Reprint creation FAILED — check REPRINT_APP_URL / REPRINT_API_KEY and tracker logs.', true)`;
   }
+  revalidatePath(`/tickets/${id}`);
+}
+
+export async function requestFilesAction(formData) {
+  await ensureSchema();
+  const sql = getSql();
+  const id = Number(formData.get('id'));
+  const author = String(formData.get('author') || 'Team').slice(0, 100);
+  if (!id) return;
+  const [t] = await sql`SELECT * FROM tickets WHERE id = ${id}`;
+  if (!t?.customer_email) return;
+
+  const body =
+    `Please send us your artwork using our secure upload page: ${uploadPageUrl()}\n\n` +
+    `You'll need your order number${t.order_number ? ` (${t.order_number})` : ''} and the email ` +
+    `address you ordered with. Files can be up to 50 MB each — please don't email them to us, ` +
+    `the upload page files them against your order automatically.`;
+
+  await sql`
+    INSERT INTO comments (ticket_id, author, body, internal)
+    VALUES (${id}, ${author}, ${body.slice(0, 10000)}, false)`;
+  await sql`UPDATE tickets SET status = 'waiting', updated_at = now() WHERE id = ${id}`;
+
+  await sendCustomerEmail({
+    to: t.customer_email,
+    subject: `Re: [${ticketRef(t.id)}] ${t.subject}`,
+    text:
+      `${body}\n\n— ${author}, DTF Now Support\n` +
+      `Reply to this email and it will be added to your support ticket ${ticketRef(t.id)}.`,
+  });
   revalidatePath(`/tickets/${id}`);
 }
 
