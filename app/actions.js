@@ -2,13 +2,21 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
+import { cookies } from 'next/headers';
 import { getSql, ensureSchema, ticketRef } from '../lib/db';
 import { createTicket } from '../lib/tickets';
 import { notifyAssigned, notifyStatus, notifySlack, appUrl } from '../lib/slack';
 import { sendCustomerEmail } from '../lib/email';
 import { createReprint, reprintConfigured } from '../lib/reprint';
+import { relayFilesToUploader, uploadsConfigured } from '../lib/uploads';
+import { sendWhatsAppText } from '../lib/whatsapp';
+import { hashPassword, verifyPassword, requireAdmin } from '../lib/auth';
+import { makeStaffSession, STAFF_COOKIE } from '../lib/session';
 
 export async function createTicketAction(formData) {
+  const order_number = String(formData.get('order_number') || '').trim();
+  if (!order_number) redirect('/tickets/new?error=order');
+
   const t = await createTicket({
     subject: formData.get('subject'),
     description: formData.get('description'),
@@ -17,14 +25,38 @@ export async function createTicketAction(formData) {
     channel: formData.get('channel') || 'manual',
     customer_name: formData.get('customer_name'),
     customer_email: formData.get('customer_email'),
-    order_number: formData.get('order_number'),
+    order_number,
     assignee: formData.get('assignee'),
   });
+
+  const files = formData.getAll('files').filter((f) => typeof f !== 'string' && f && f.size > 0);
+  if (files.length > 0) {
+    const sql = getSql();
+    if (!uploadsConfigured()) {
+      await sql`INSERT INTO comments (ticket_id, author, body, internal)
+        VALUES (${t.id}, 'System', ${'Staff attached ' + files.length + ' file(s) but UPLOAD_APP_URL is not configured — files were NOT stored.'}, true)`;
+    } else {
+      const result = await relayFilesToUploader({
+        name: String(formData.get('customer_name') || ''),
+        email: String(formData.get('customer_email') || ''),
+        orderNumber: order_number,
+        files,
+      });
+      const body = result.ok
+        ? `Uploaded ${result.fileNames?.length || files.length} file(s) to Files Uploader (order ${result.orderName || order_number}): ${(result.fileNames || []).join(', ')} — saved to Google Drive.`
+        : `Attached ${files.length} file(s) but the Files Uploader rejected them: ${result.error || 'unknown error'}.`;
+      await sql`INSERT INTO comments (ticket_id, author, body, internal)
+        VALUES (${t.id}, 'System', ${body.slice(0, 5000)}, ${!result.ok})`;
+    }
+  }
+
   redirect(`/tickets/${t.id}`);
 }
 
 export async function publicTicketAction(formData) {
-  const needsFiles = formData.get('needs_files') === 'on';
+  const order_number = String(formData.get('order_number') || '').trim();
+  if (!order_number) redirect('/support?error=order');
+
   const t = await createTicket({
     subject: formData.get('subject'),
     description: formData.get('description'),
@@ -32,10 +64,54 @@ export async function publicTicketAction(formData) {
     channel: 'form',
     customer_name: formData.get('customer_name'),
     customer_email: formData.get('customer_email'),
-    order_number: formData.get('order_number'),
+    order_number,
   });
-  // Send customers with artwork straight to the uploader after submitting.
-  redirect(needsFiles ? '/thanks?upload=1' : '/thanks');
+
+  const files = formData.getAll('files').filter((f) => typeof f !== 'string' && f && f.size > 0);
+  if (files.length > 0) {
+    const sql = getSql();
+    if (!uploadsConfigured()) {
+      await sql`INSERT INTO comments (ticket_id, author, body, internal)
+        VALUES (${t.id}, 'System', ${'Customer attached ' + files.length + ' file(s) but UPLOAD_APP_URL is not configured — files were NOT stored.'}, true)`;
+    } else {
+      const result = await relayFilesToUploader({
+        name: String(formData.get('customer_name') || ''),
+        email: String(formData.get('customer_email') || ''),
+        orderNumber: order_number,
+        files,
+      });
+      const body = result.ok
+        ? `Customer uploaded ${result.fileNames?.length || files.length} file(s) via Files Uploader (order ${result.orderName || order_number}): ${(result.fileNames || []).join(', ')} — saved to Google Drive, order tagged files-uploaded.`
+        : `Customer attached ${files.length} file(s) but the Files Uploader rejected them: ${result.error || 'unknown error'}. Ask the customer to use the upload page directly.`;
+      await sql`INSERT INTO comments (ticket_id, author, body, internal)
+        VALUES (${t.id}, 'System', ${body.slice(0, 5000)}, ${!result.ok})`;
+    }
+  }
+  redirect('/thanks');
+}
+
+export async function editTicketAction(formData) {
+  await ensureSchema();
+  const sql = getSql();
+  const id = Number(formData.get('id'));
+  const subject = String(formData.get('subject') || '').trim().slice(0, 300);
+  const description = String(formData.get('description') || '').slice(0, 10000);
+  if (!id || !subject) return;
+  await sql`UPDATE tickets SET subject = ${subject}, description = ${description}, updated_at = now() WHERE id = ${id}`;
+  revalidatePath(`/tickets/${id}`);
+  revalidatePath('/tickets');
+}
+
+export async function deleteTicketAction(formData) {
+  await requireAdmin();
+  await ensureSchema();
+  const sql = getSql();
+  const id = Number(formData.get('id'));
+  if (!id) return;
+  await sql`DELETE FROM comments WHERE ticket_id = ${id}`;
+  await sql`DELETE FROM tickets WHERE id = ${id}`;
+  revalidatePath('/tickets');
+  redirect('/tickets');
 }
 
 export async function assignAction(formData) {
@@ -79,8 +155,6 @@ export async function commentAction(formData) {
     VALUES (${id}, ${author}, ${body.slice(0, 10000)}, ${internal})`;
   await sql`UPDATE tickets SET updated_at = now() WHERE id = ${id}`;
 
-  // Public replies are emailed to the customer (Resend). Their replies thread
-  // back in via /api/inbound-email matching the [DTF-xxxx] ref in the subject.
   if (!internal) {
     const [t] = await sql`SELECT * FROM tickets WHERE id = ${id}`;
     if (t?.customer_email) {
@@ -93,32 +167,6 @@ export async function commentAction(formData) {
       });
     }
   }
-  revalidatePath(`/tickets/${id}`);
-}
-
-export async function requestFilesAction(formData) {
-  await ensureSchema();
-  const sql = getSql();
-  const id = Number(formData.get('id'));
-  const uploadUrl = String(formData.get('uploadUrl') || '');
-  const author = String(formData.get('author') || 'Team').slice(0, 100);
-  const [t] = await sql`SELECT * FROM tickets WHERE id = ${id}`;
-  if (!t?.customer_email || !uploadUrl) return;
-
-  const body =
-    `Please send us your artwork using our secure upload page:\n${uploadUrl}\n\n` +
-    `You'll need your order number${t.order_number ? ` (${t.order_number})` : ''} and the email you ordered with. ` +
-    `Files up to 50 MB are fine, and you can attach several at once.`;
-
-  await sql`
-    INSERT INTO comments (ticket_id, author, body, internal)
-    VALUES (${id}, ${author}, ${body}, false)`;
-  await sql`UPDATE tickets SET status = 'waiting', updated_at = now() WHERE id = ${id}`;
-  await sendCustomerEmail({
-    to: t.customer_email,
-    subject: `Re: [${ticketRef(t.id)}] ${t.subject}`,
-    text: `${body}\n\n— ${author}, DTF Now Support`,
-  });
   revalidatePath(`/tickets/${id}`);
 }
 
@@ -143,9 +191,7 @@ export async function raiseReprintAction(formData) {
   if (!t || t.reprint_id || !reprintConfigured()) return;
 
   const rows = await sql`SELECT shop FROM shop_tokens ORDER BY updated_at DESC LIMIT 1`;
-  const shop =
-    rows[0]?.shop ||
-    `${(process.env.SHOPIFY_STORE || '').replace('.myshopify.com', '')}.myshopify.com`;
+  const shop = rows[0]?.shop || `${(process.env.SHOPIFY_STORE || '').replace('.myshopify.com', '')}.myshopify.com`;
 
   const reason = t.category === 'print_quality' ? 'misprint' : 'other';
   const created = await createReprint({
@@ -162,12 +208,204 @@ export async function raiseReprintAction(formData) {
     await sql`UPDATE tickets SET reprint_id = ${created.id}, reprint_token = ${created.publicToken || ''}, updated_at = now() WHERE id = ${id}`;
     await sql`INSERT INTO comments (ticket_id, author, body, internal)
       VALUES (${id}, 'System', ${'Reprint raised in tracker' + (created.trackUrl ? ` — customer tracking: ${created.trackUrl}` : '')}, true)`;
-    await notifySlack(
-      `:repeat: Reprint raised from ticket *${ticketRef(id)}*${t.order_number ? ` (order ${t.order_number})` : ''}`
-    );
+    await notifySlack(`:repeat: Reprint raised from ticket *${ticketRef(id)}*${t.order_number ? ` (order ${t.order_number})` : ''}`);
   } else {
     await sql`INSERT INTO comments (ticket_id, author, body, internal)
       VALUES (${id}, 'System', 'Reprint creation FAILED — check REPRINT_APP_URL / REPRINT_API_KEY and tracker logs.', true)`;
   }
   revalidatePath(`/tickets/${id}`);
+}
+
+// ---- WhatsApp live chat ----
+
+export async function sendWaAction(formData) {
+  await ensureSchema();
+  const sql = getSql();
+  const conversationId = Number(formData.get('conversation_id'));
+  const body = String(formData.get('body') || '').trim();
+  const author = String(formData.get('author') || 'Team').slice(0, 100);
+  if (!conversationId || !body) return;
+  const [conv] = await sql`SELECT * FROM wa_conversations WHERE id = ${conversationId}`;
+  if (!conv) return;
+  const result = await sendWhatsAppText(conv.wa_id, body);
+  const status = result.ok ? 'sent' : `failed: ${(result.error || '').slice(0, 200)}`;
+  await sql`INSERT INTO wa_messages (conversation_id, wa_message_id, direction, body, status, author)
+    VALUES (${conversationId}, ${result.id || ''}, 'out', ${body.slice(0, 4096)}, ${status}, ${author})`;
+  await sql`UPDATE wa_conversations SET last_message_at = now(), unread = 0 WHERE id = ${conversationId}`;
+  revalidatePath(`/whatsapp/${conversationId}`);
+  revalidatePath('/whatsapp');
+}
+
+export async function assignWaAction(formData) {
+  await ensureSchema();
+  const sql = getSql();
+  const conversationId = Number(formData.get('conversation_id'));
+  const assignee = String(formData.get('assignee') || '');
+  await sql`UPDATE wa_conversations SET assignee = ${assignee} WHERE id = ${conversationId}`;
+  revalidatePath(`/whatsapp/${conversationId}`);
+  revalidatePath('/whatsapp');
+}
+
+export async function waStatusAction(formData) {
+  await ensureSchema();
+  const sql = getSql();
+  const conversationId = Number(formData.get('conversation_id'));
+  const status = String(formData.get('status') || 'open');
+  if (!['open', 'closed'].includes(status)) return;
+  await sql`UPDATE wa_conversations SET status = ${status} WHERE id = ${conversationId}`;
+  revalidatePath(`/whatsapp/${conversationId}`);
+  revalidatePath('/whatsapp');
+}
+
+export async function deleteWaMessageAction(formData) {
+  await ensureSchema();
+  const sql = getSql();
+  const id = Number(formData.get('id'));
+  if (!id) return;
+  const [m] = await sql`SELECT conversation_id FROM wa_messages WHERE id = ${id}`;
+  if (m) {
+    await sql`DELETE FROM wa_messages WHERE id = ${id}`;
+    revalidatePath(`/whatsapp/${m.conversation_id}`);
+  }
+}
+
+export async function editWaMessageAction(formData) {
+  await ensureSchema();
+  const sql = getSql();
+  const id = Number(formData.get('id'));
+  const body = String(formData.get('body') || '').trim();
+  if (!id || !body) return;
+  const [m] = await sql`UPDATE wa_messages SET body = ${body.slice(0, 4096)}, edited = true WHERE id = ${id} RETURNING conversation_id`;
+  if (m) revalidatePath(`/whatsapp/${m.conversation_id}`);
+}
+
+export async function deleteWaConversationAction(formData) {
+  await ensureSchema();
+  const sql = getSql();
+  const conversationId = Number(formData.get('conversation_id'));
+  if (conversationId) await sql`DELETE FROM wa_conversations WHERE id = ${conversationId}`;
+  revalidatePath('/whatsapp');
+  redirect('/whatsapp');
+}
+
+export async function createTicketFromWaAction(formData) {
+  await ensureSchema();
+  const sql = getSql();
+  const conversationId = Number(formData.get('conversation_id'));
+  const [conv] = await sql`SELECT * FROM wa_conversations WHERE id = ${conversationId}`;
+  if (!conv) return;
+  const [firstMsg] = await sql`
+    SELECT body FROM wa_messages WHERE conversation_id = ${conversationId} AND direction = 'in'
+    ORDER BY created_at ASC LIMIT 1`;
+  const t = await createTicket({
+    subject: `WhatsApp chat with ${conv.name || '+' + conv.wa_id}`,
+    description: firstMsg?.body || '',
+    channel: 'whatsapp',
+    category: 'other',
+    customer_name: conv.name || '',
+    assignee: conv.assignee || '',
+  });
+  await sql`UPDATE tickets SET wa_conversation_id = ${conversationId} WHERE id = ${t.id}`;
+  redirect(`/tickets/${t.id}`);
+}
+
+// ---- Canned replies ----
+
+export async function addCannedAction(formData) {
+  await ensureSchema();
+  const sql = getSql();
+  const title = String(formData.get('title') || '').trim().slice(0, 200);
+  const body = String(formData.get('body') || '').trim().slice(0, 5000);
+  if (!title || !body) return;
+  await sql`INSERT INTO canned_replies (title, body) VALUES (${title}, ${body})`;
+  revalidatePath('/canned');
+}
+
+export async function deleteCannedAction(formData) {
+  await ensureSchema();
+  const sql = getSql();
+  const id = Number(formData.get('id'));
+  if (id) await sql`DELETE FROM canned_replies WHERE id = ${id}`;
+  revalidatePath('/canned');
+}
+
+// ---- Auth ----
+
+export async function loginAction(formData) {
+  const email = String(formData.get('email') || '').trim().toLowerCase();
+  const password = String(formData.get('password') || '');
+  const nextRaw = String(formData.get('next') || '/tickets');
+  const next = nextRaw.startsWith('/') ? nextRaw : '/tickets';
+  await ensureSchema();
+  const sql = getSql();
+  const [s] = await sql`SELECT * FROM staff WHERE lower(email) = ${email} AND active = true`;
+  if (!s || !s.password_hash || !verifyPassword(password, s.password_hash)) {
+    redirect(`/login?error=1&next=${encodeURIComponent(next)}`);
+  }
+  const value = await makeStaffSession({ id: s.id, email: s.email, name: s.name, role: s.role });
+  cookies().set(STAFF_COOKIE, value, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'lax',
+    path: '/',
+    maxAge: 7 * 24 * 60 * 60,
+  });
+  redirect(next);
+}
+
+// ---- Staff management (admin only) ----
+
+export async function addStaffAction(formData) {
+  await requireAdmin();
+  await ensureSchema();
+  const sql = getSql();
+  const name = String(formData.get('name') || '').trim().slice(0, 100);
+  const email = String(formData.get('email') || '').trim().toLowerCase().slice(0, 200);
+  const role = String(formData.get('role') || 'agent') === 'admin' ? 'admin' : 'agent';
+  const slack_id = String(formData.get('slack_id') || '').trim().slice(0, 50);
+  const password = String(formData.get('password') || '');
+  if (!name || !email) return;
+  const password_hash = password ? hashPassword(password) : '';
+  await sql`
+    INSERT INTO staff (name, email, role, slack_id, password_hash)
+    VALUES (${name}, ${email}, ${role}, ${slack_id}, ${password_hash})
+    ON CONFLICT (email) DO UPDATE SET
+      name = EXCLUDED.name, role = EXCLUDED.role, slack_id = EXCLUDED.slack_id, active = true`;
+  revalidatePath('/admin');
+}
+
+export async function setStaffPasswordAction(formData) {
+  await requireAdmin();
+  const sql = getSql();
+  const id = Number(formData.get('id'));
+  const password = String(formData.get('password') || '');
+  if (!id || !password) return;
+  await sql`UPDATE staff SET password_hash = ${hashPassword(password)} WHERE id = ${id}`;
+  revalidatePath('/admin');
+}
+
+export async function setStaffActiveAction(formData) {
+  await requireAdmin();
+  const sql = getSql();
+  const id = Number(formData.get('id'));
+  const active = String(formData.get('active')) === 'true';
+  if (id) await sql`UPDATE staff SET active = ${active} WHERE id = ${id}`;
+  revalidatePath('/admin');
+}
+
+export async function setStaffRoleAction(formData) {
+  await requireAdmin();
+  const sql = getSql();
+  const id = Number(formData.get('id'));
+  const role = String(formData.get('role')) === 'admin' ? 'admin' : 'agent';
+  if (id) await sql`UPDATE staff SET role = ${role} WHERE id = ${id}`;
+  revalidatePath('/admin');
+}
+
+export async function deleteStaffAction(formData) {
+  const me = await requireAdmin();
+  const sql = getSql();
+  const id = Number(formData.get('id'));
+  if (id && id !== me.id) await sql`DELETE FROM staff WHERE id = ${id}`;
+  revalidatePath('/admin');
 }
