@@ -10,8 +10,9 @@ import { sendCustomerEmail } from '../lib/email';
 import { createReprint, reprintConfigured } from '../lib/reprint';
 import { relayFilesToUploader, uploadsConfigured, uploadPageUrl } from '../lib/uploads';
 import { sendWhatsAppText } from '../lib/whatsapp';
-import { hashPassword, verifyPassword, requireAdmin } from '../lib/auth';
+import { hashPassword, verifyPassword, requireAdmin, currentUser } from '../lib/auth';
 import { makeStaffSession, STAFF_COOKIE } from '../lib/session';
+import { logEvent, currentActor } from '../lib/events';
 
 export async function createTicketAction(formData) {
   const order_number = String(formData.get('order_number') || '').trim();
@@ -27,7 +28,7 @@ export async function createTicketAction(formData) {
     customer_email: formData.get('customer_email'),
     order_number,
     assignee: formData.get('assignee'),
-  });
+  }, { actor: await currentActor() });
 
   const files = formData.getAll('files').filter((f) => typeof f !== 'string' && f && f.size > 0);
   if (files.length > 0) {
@@ -79,7 +80,15 @@ export async function editTicketAction(formData) {
   const subject = String(formData.get('subject') || '').trim().slice(0, 300);
   const description = String(formData.get('description') || '').slice(0, 10000);
   if (!id || !subject) return;
+  const [before] = await sql`SELECT subject, description FROM tickets WHERE id = ${id}`;
   await sql`UPDATE tickets SET subject = ${subject}, description = ${description}, updated_at = now() WHERE id = ${id}`;
+  if (before) {
+    const norm = (v) => String(v || '').replace(/\r\n/g, '\n');
+    const changed = [];
+    if (before.subject !== subject) changed.push('subject');
+    if (norm(before.description) !== norm(description)) changed.push('description');
+    if (changed.length) await logEvent(id, await currentActor(), 'edited', '', changed.join(' and '));
+  }
   revalidatePath(`/tickets/${id}`);
   revalidatePath('/tickets');
 }
@@ -92,8 +101,37 @@ export async function deleteTicketAction(formData) {
   if (!id) return;
   await sql`DELETE FROM comments WHERE ticket_id = ${id}`;
   await sql`DELETE FROM tickets WHERE id = ${id}`;
+  try {
+    await sql`DELETE FROM ticket_events WHERE ticket_id = ${id}`;
+  } catch (e) {
+    console.error('ticket_events cleanup failed:', e.message);
+  }
   revalidatePath('/tickets');
   redirect('/tickets');
+}
+
+// Shared status update (Status form + quick-action buttons): update, Slack notify, history.
+async function applyStatus(sql, id, status, actor) {
+  const allowed = ['open', 'in_progress', 'waiting', 'resolved', 'closed'];
+  if (!allowed.includes(status)) return;
+  const [before] = await sql`SELECT status FROM tickets WHERE id = ${id}`;
+  const [t] = await sql`
+    UPDATE tickets SET status = ${status}, updated_at = now()
+    WHERE id = ${id} RETURNING *`;
+  if (t) await notifyStatus(t, status);
+  if (t && before && before.status !== status) await logEvent(id, actor, 'status', before.status, status);
+}
+
+// Shared assignment (Assign form + "Start working"): update, Slack notify, history.
+// Assigning someone to an Open ticket moves it to In progress.
+async function applyAssign(sql, id, assignee, actor) {
+  const [before] = await sql`SELECT assignee FROM tickets WHERE id = ${id}`;
+  const [t] = await sql`
+    UPDATE tickets SET assignee = ${assignee}, updated_at = now()
+    WHERE id = ${id} RETURNING *`;
+  if (t && assignee) await notifyAssigned(t, assignee);
+  if (t && before && before.assignee !== assignee) await logEvent(id, actor, 'assign', before.assignee, assignee);
+  if (t && assignee && t.status === 'open') await applyStatus(sql, id, 'in_progress', actor);
 }
 
 export async function assignAction(formData) {
@@ -101,10 +139,7 @@ export async function assignAction(formData) {
   const sql = getSql();
   const id = Number(formData.get('id'));
   const assignee = String(formData.get('assignee') || '');
-  const [t] = await sql`
-    UPDATE tickets SET assignee = ${assignee}, updated_at = now()
-    WHERE id = ${id} RETURNING *`;
-  if (t && assignee) await notifyAssigned(t, assignee);
+  await applyAssign(sql, id, assignee, await currentActor());
   revalidatePath(`/tickets/${id}`);
   revalidatePath('/tickets');
 }
@@ -114,12 +149,24 @@ export async function statusAction(formData) {
   const sql = getSql();
   const id = Number(formData.get('id'));
   const status = String(formData.get('status'));
-  const allowed = ['open', 'in_progress', 'waiting', 'resolved', 'closed'];
-  if (!allowed.includes(status)) return;
-  const [t] = await sql`
-    UPDATE tickets SET status = ${status}, updated_at = now()
-    WHERE id = ${id} RETURNING *`;
-  if (t) await notifyStatus(t, status);
+  await applyStatus(sql, id, status, await currentActor());
+  revalidatePath(`/tickets/${id}`);
+  revalidatePath('/tickets');
+}
+
+// "Start working": take an unassigned ticket and move it to In progress.
+export async function startWorkingAction(formData) {
+  await ensureSchema();
+  const sql = getSql();
+  const id = Number(formData.get('id'));
+  if (!id) return;
+  const me = await currentUser().catch(() => null);
+  const actor = me?.name || 'System';
+  const [t] = await sql`SELECT status, assignee FROM tickets WHERE id = ${id}`;
+  if (!t) return;
+  if (!t.assignee && me?.source === 'staff' && me.name) await applyAssign(sql, id, me.name, actor);
+  const [now] = await sql`SELECT status FROM tickets WHERE id = ${id}`;
+  if (now && now.status !== 'in_progress') await applyStatus(sql, id, 'in_progress', actor);
   revalidatePath(`/tickets/${id}`);
   revalidatePath('/tickets');
 }
@@ -136,6 +183,7 @@ export async function commentAction(formData) {
     INSERT INTO comments (ticket_id, author, body, internal)
     VALUES (${id}, ${author}, ${body.slice(0, 10000)}, ${internal})`;
   await sql`UPDATE tickets SET updated_at = now() WHERE id = ${id}`;
+  await logEvent(id, await currentActor(author), internal ? 'note' : 'reply');
 
   if (!internal) {
     const [t] = await sql`SELECT * FROM tickets WHERE id = ${id}`;
@@ -191,9 +239,11 @@ export async function raiseReprintAction(formData) {
     await sql`INSERT INTO comments (ticket_id, author, body, internal)
       VALUES (${id}, 'System', ${'Reprint raised in tracker' + (created.trackUrl ? ` — customer tracking: ${created.trackUrl}` : '')}, true)`;
     await notifySlack(`:repeat: Reprint raised from ticket *${ticketRef(id)}*${t.order_number ? ` (order ${t.order_number})` : ''}`);
+    await logEvent(id, await currentActor(String(formData.get('raisedBy') || 'Helpdesk')), 'reprint', '', created.id);
   } else {
     await sql`INSERT INTO comments (ticket_id, author, body, internal)
       VALUES (${id}, 'System', 'Reprint creation FAILED — check REPRINT_APP_URL / REPRINT_API_KEY and tracker logs.', true)`;
+    await logEvent(id, await currentActor(String(formData.get('raisedBy') || 'Helpdesk')), 'reprint_failed');
   }
   revalidatePath(`/tickets/${id}`);
 }
@@ -217,6 +267,9 @@ export async function requestFilesAction(formData) {
     INSERT INTO comments (ticket_id, author, body, internal)
     VALUES (${id}, ${author}, ${body.slice(0, 10000)}, false)`;
   await sql`UPDATE tickets SET status = 'waiting', updated_at = now() WHERE id = ${id}`;
+  const actor = await currentActor(author);
+  await logEvent(id, actor, 'upload_link');
+  if (t.status !== 'waiting') await logEvent(id, actor, 'status', t.status, 'waiting');
 
   await sendCustomerEmail({
     to: t.customer_email,
@@ -316,7 +369,7 @@ export async function createTicketFromWaAction(formData) {
     category: 'other',
     customer_name: conv.name || '',
     assignee: conv.assignee || '',
-  });
+  }, { actor: await currentActor() });
   await sql`UPDATE tickets SET wa_conversation_id = ${conversationId} WHERE id = ${t.id}`;
   redirect(`/tickets/${t.id}`);
 }
@@ -367,6 +420,27 @@ export async function loginAction(formData) {
 
 // ---- Staff management (admin only) ----
 
+// Redirect back to /admin with a visible notice (?ok= or ?error=).
+function adminNotice(kind, message) {
+  redirect(`/admin?${new URLSearchParams({ [kind]: message }).toString()}`);
+}
+
+function duplicateEmailMessage(email) {
+  return `A staff member with email ${email} already exists — edit their row instead`;
+}
+
+// Active admins other than the given staff id (lockout protection).
+async function otherActiveAdmins(sql, id) {
+  const [{ count }] = await sql`
+    SELECT COUNT(*)::int AS count FROM staff WHERE role = 'admin' AND active = true AND id <> ${id}`;
+  return count;
+}
+
+async function isLastActiveAdmin(sql, id) {
+  const [target] = await sql`SELECT role, active FROM staff WHERE id = ${id}`;
+  return !!target && target.role === 'admin' && target.active && (await otherActiveAdmins(sql, id)) === 0;
+}
+
 export async function addStaffAction(formData) {
   await requireAdmin();
   await ensureSchema();
@@ -376,14 +450,51 @@ export async function addStaffAction(formData) {
   const role = String(formData.get('role') || 'agent') === 'admin' ? 'admin' : 'agent';
   const slack_id = String(formData.get('slack_id') || '').trim().slice(0, 50);
   const password = String(formData.get('password') || '');
-  if (!name || !email) return;
+  if (!name || !email) adminNotice('error', 'Name and email are required.');
+  // Plain insert: never touch an existing member (autofilled emails used to overwrite rows).
+  const [existing] = await sql`SELECT id FROM staff WHERE lower(email) = ${email}`;
+  if (existing) adminNotice('error', duplicateEmailMessage(email));
   const password_hash = password ? hashPassword(password) : '';
-  await sql`
-    INSERT INTO staff (name, email, role, slack_id, password_hash)
-    VALUES (${name}, ${email}, ${role}, ${slack_id}, ${password_hash})
-    ON CONFLICT (email) DO UPDATE SET
-      name = EXCLUDED.name, role = EXCLUDED.role, slack_id = EXCLUDED.slack_id, active = true`;
+  let duplicate = false;
+  try {
+    await sql`
+      INSERT INTO staff (name, email, role, slack_id, password_hash)
+      VALUES (${name}, ${email}, ${role}, ${slack_id}, ${password_hash})`;
+  } catch (e) {
+    if (e.code !== '23505') throw e;
+    duplicate = true;
+  }
+  if (duplicate) adminNotice('error', duplicateEmailMessage(email));
   revalidatePath('/admin');
+  adminNotice('ok', `Added ${name}`);
+}
+
+export async function updateStaffAction(formData) {
+  await requireAdmin();
+  await ensureSchema();
+  const sql = getSql();
+  const id = Number(formData.get('id'));
+  const name = String(formData.get('name') || '').trim().slice(0, 100);
+  const email = String(formData.get('email') || '').trim().toLowerCase().slice(0, 200);
+  const slack_id = String(formData.get('slack_id') || '').trim().slice(0, 50);
+  if (!id || !name || !email) adminNotice('error', 'Name and email are required.');
+  const [clash] = await sql`SELECT id FROM staff WHERE lower(email) = ${email} AND id <> ${id}`;
+  if (clash) adminNotice('error', duplicateEmailMessage(email));
+  let duplicate = false;
+  let updated = null;
+  try {
+    const rows = await sql`
+      UPDATE staff SET name = ${name}, email = ${email}, slack_id = ${slack_id}
+      WHERE id = ${id} RETURNING id`;
+    updated = rows[0] || null;
+  } catch (e) {
+    if (e.code !== '23505') throw e;
+    duplicate = true;
+  }
+  if (duplicate) adminNotice('error', duplicateEmailMessage(email));
+  if (!updated) adminNotice('error', 'Staff member not found.');
+  revalidatePath('/admin');
+  adminNotice('ok', `Updated ${name}`);
 }
 
 export async function setStaffPasswordAction(formData) {
@@ -401,6 +512,9 @@ export async function setStaffActiveAction(formData) {
   const sql = getSql();
   const id = Number(formData.get('id'));
   const active = String(formData.get('active')) === 'true';
+  if (id && !active && (await isLastActiveAdmin(sql, id))) {
+    adminNotice('error', "Can't deactivate the last active admin — make someone else an admin first.");
+  }
   if (id) await sql`UPDATE staff SET active = ${active} WHERE id = ${id}`;
   revalidatePath('/admin');
 }
@@ -410,6 +524,9 @@ export async function setStaffRoleAction(formData) {
   const sql = getSql();
   const id = Number(formData.get('id'));
   const role = String(formData.get('role')) === 'admin' ? 'admin' : 'agent';
+  if (id && role !== 'admin' && (await isLastActiveAdmin(sql, id))) {
+    adminNotice('error', "Can't demote the last active admin — make someone else an admin first.");
+  }
   if (id) await sql`UPDATE staff SET role = ${role} WHERE id = ${id}`;
   revalidatePath('/admin');
 }
@@ -418,6 +535,10 @@ export async function deleteStaffAction(formData) {
   const me = await requireAdmin();
   const sql = getSql();
   const id = Number(formData.get('id'));
+  if (id && id === me.id) adminNotice('error', "You can't remove yourself.");
+  if (id && (await isLastActiveAdmin(sql, id))) {
+    adminNotice('error', "Can't remove the last active admin — make someone else an admin first.");
+  }
   if (id && id !== me.id) await sql`DELETE FROM staff WHERE id = ${id}`;
   revalidatePath('/admin');
 }

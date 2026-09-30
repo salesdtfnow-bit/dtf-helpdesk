@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation';
 import { getSql, ensureSchema, ticketRef } from '../lib/db';
 import { sendCustomerEmail } from '../lib/email';
 import { createTicket } from '../lib/tickets';
+import { logEvent, currentActor } from '../lib/events';
 
 export async function sendEmailReplyAction(formData) {
   await ensureSchema();
@@ -57,6 +58,7 @@ export async function emailFromTicketAction(formData) {
     VALUES (${conv.id}, 'out', ${subject.slice(0, 300)}, ${body.slice(0, 20000)}, ${author})`;
   await sql`INSERT INTO comments (ticket_id, author, body, internal)
     VALUES (${ticketId}, ${author}, ${('Emailed customer: ' + body).slice(0, 9000)}, true)`;
+  await logEvent(ticketId, await currentActor(author), 'email_sent');
   revalidatePath(`/tickets/${ticketId}`);
   revalidatePath(`/email/${conv.id}`);
   revalidatePath('/email');
@@ -131,6 +133,6 @@ export async function createTicketFromEmailAction(formData) {
     customer_name: conv.name || '',
     customer_email: conv.email,
     assignee: conv.assignee || '',
-  });
+  }, { actor: await currentActor('Email') });
   redirect(`/tickets/${t.id}`);
 }
