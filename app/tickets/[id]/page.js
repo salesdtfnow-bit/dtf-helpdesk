@@ -13,11 +13,14 @@ import {
   requestFilesAction,
   editTicketAction,
   sendWaAction,
+  startWorkingAction,
 } from '../../actions';
 import { emailFromTicketAction } from '../../actions-email';
+import { describeEvent, shortTime, shortDate } from '../../../lib/events';
 import CannedPicker from './CannedPicker';
 import TicketNav from './TicketNav';
 import DeleteTicketButton from './DeleteTicketButton';
+import SubmitButton from '../../SubmitButton';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,6 +36,19 @@ function fileSize(bytes) {
   return n >= 1024 * 1024
     ? `${(n / (1024 * 1024)).toFixed(1)} MB`
     : `${Math.max(1, Math.round(n / 1024))} KB`;
+}
+
+// One-click status button (reuses statusAction, so Slack + history behave the same).
+function QuickStatus({ id, status, children }) {
+  return (
+    <form action={statusAction}>
+      <input type="hidden" name="id" value={id} />
+      <input type="hidden" name="status" value={status} />
+      <SubmitButton className="secondary" pendingText="Saving…">
+        {children}
+      </SubmitButton>
+    </form>
+  );
 }
 
 export default async function TicketPage({ params, searchParams }) {
@@ -59,6 +75,12 @@ export default async function TicketPage({ params, searchParams }) {
       ? sql``
       : filter === 'active'
       ? sql`AND t.status IN ('open','in_progress','waiting')`
+      : filter === 'mine'
+      ? me?.name
+        ? sql`AND t.status IN ('open','in_progress','waiting') AND t.assignee = ${me.name}`
+        : sql`AND false`
+      : filter === 'unassigned'
+      ? sql`AND t.status IN ('open','in_progress','waiting') AND t.assignee = ''`
       : sql`AND t.status = ${filter}`;
   const [prevTicket] = await sql`
     WITH c AS (SELECT updated_at, id FROM tickets WHERE id = ${id})
@@ -101,6 +123,24 @@ export default async function TicketPage({ params, searchParams }) {
   const attByMsg = {};
   for (const a of emailAtt) (attByMsg[a.email_message_id] ||= []).push(a);
 
+  // Ticket history (newest first). Never let a history problem break the page.
+  let events = [];
+  let historyStart = null;
+  try {
+    events = await sql`
+      SELECT * FROM ticket_events WHERE ticket_id = ${id}
+      ORDER BY created_at DESC, id DESC LIMIT 200`;
+    if (events.length === 0) {
+      const [first] = await sql`SELECT MIN(created_at) AS first FROM ticket_events`;
+      historyStart = first?.first || null;
+    }
+  } catch (e) {
+    console.error('ticket history failed:', e.message);
+  }
+
+  const stepIndex = STATUSES.indexOf(ticket.status);
+  const isActive = ['open', 'in_progress', 'waiting'].includes(ticket.status);
+
   return (
     <>
       <div className="ticket-head">
@@ -114,6 +154,41 @@ export default async function TicketPage({ params, searchParams }) {
           </p>
         </div>
         <TicketNav prevId={prevTicket?.id} nextId={nextTicket?.id} status={filter} />
+      </div>
+
+      <div className="progress-row">
+        <ol className="stepper" aria-label="Ticket progress">
+          {STATUSES.map((s, i) => (
+            <li
+              key={s}
+              className={`step${i < stepIndex ? ' done' : ''}${i === stepIndex ? ' current' : ''}`}
+              aria-current={i === stepIndex ? 'step' : undefined}
+            >
+              <span className="step-dot">{i < stepIndex ? '✓' : i + 1}</span>
+              <span className="step-label">{LABELS[s]}</span>
+            </li>
+          ))}
+        </ol>
+        <div className="quick-actions">
+          {ticket.status === 'open' && (
+            <form action={startWorkingAction}>
+              <input type="hidden" name="id" value={ticket.id} />
+              <SubmitButton pendingText="Starting…">Start working</SubmitButton>
+            </form>
+          )}
+          {['open', 'in_progress'].includes(ticket.status) && (
+            <QuickStatus id={ticket.id} status="waiting">Waiting on customer</QuickStatus>
+          )}
+          {isActive && (
+            <QuickStatus id={ticket.id} status="resolved">Mark resolved</QuickStatus>
+          )}
+          {ticket.status !== 'closed' && (
+            <QuickStatus id={ticket.id} status="closed">Close</QuickStatus>
+          )}
+          {['resolved', 'closed'].includes(ticket.status) && (
+            <QuickStatus id={ticket.id} status="open">Reopen</QuickStatus>
+          )}
+        </div>
       </div>
 
       <div className="grid">
@@ -251,6 +326,26 @@ export default async function TicketPage({ params, searchParams }) {
               </form>
             </div>
           )}
+
+          <div className="card">
+            <h2>History</h2>
+            {events.length === 0 ? (
+              <p className="muted">
+                No history recorded for this ticket yet.{' '}
+                {historyStart
+                  ? `History starts from ${shortDate(historyStart)}.`
+                  : 'History tracking starts from now.'}
+              </p>
+            ) : (
+              <ul className="history">
+                {events.map((e) => (
+                  <li key={e.id}>
+                    {describeEvent(e)} <span className="muted">· {shortTime(e.created_at)}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </div>
 
         <div>

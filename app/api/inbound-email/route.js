@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSql, ensureSchema } from '../../../lib/db';
+import { logEvent } from '../../../lib/events';
 
 // Optional SendGrid Inbound Parse intake (the IONOS IMAP sync is the primary
 // path). Feeds the Email inbox; threads [DTF-xxxx] replies into tickets. No
@@ -60,6 +61,8 @@ export async function POST(req) {
         VALUES (${ticketId}, ${(name || email).slice(0, 100)}, ${(text || '').slice(0, 10000)}, false)`;
       const newStatus = ['resolved', 'closed', 'waiting'].includes(t.status) ? 'open' : t.status;
       await sql`UPDATE tickets SET status = ${newStatus}, updated_at = now() WHERE id = ${ticketId}`;
+      await logEvent(ticketId, 'Email', 'customer_reply', '', email);
+      if (newStatus !== t.status) await logEvent(ticketId, 'Email', 'status', t.status, newStatus);
     }
   }
 
