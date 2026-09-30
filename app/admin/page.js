@@ -27,8 +27,8 @@ export default async function AdminPage({ searchParams }) {
     <>
       <h1>Admin · Staff</h1>
       <p className="muted">
-        Add or remove staff, set roles and passwords. Staff sign in at /login with their email and
-        password. Admins can access this page; agents cannot.
+        Add or remove staff, set roles and passwords. Staff sign in at /login with their name or Slack
+        member ID and password. Admins can access this page; agents cannot.
       </p>
 
       {(error || ok) && (
@@ -47,6 +47,7 @@ export default async function AdminPage({ searchParams }) {
             <thead>
               <tr>
                 <th>Name</th>
+                <th>Slack ID</th>
                 <th>Email</th>
                 <th>Role</th>
                 <th>Password</th>
@@ -60,7 +61,8 @@ export default async function AdminPage({ searchParams }) {
               {staff.map((m) => (
                 <tr key={m.id}>
                   <td>{m.name}</td>
-                  <td className="muted nowrap">{m.email}</td>
+                  <td className="muted nowrap">{m.slack_id || '—'}</td>
+                  <td className="muted nowrap">{m.email || '—'}</td>
                   <td>
                     <form action={setStaffRoleAction} className="inline-form">
                       <input type="hidden" name="id" value={m.id} />
@@ -108,12 +110,12 @@ export default async function AdminPage({ searchParams }) {
                           <input name="name" required defaultValue={m.name} autoComplete="off" />
                         </div>
                         <div>
-                          <label>Email</label>
-                          <input name="email" type="email" required defaultValue={m.email} autoComplete="off" />
+                          <label>Slack member ID</label>
+                          <input name="slack_id" required defaultValue={m.slack_id} placeholder="U0XXXXXXXXX" autoComplete="off" />
                         </div>
                         <div>
-                          <label>Slack member ID</label>
-                          <input name="slack_id" defaultValue={m.slack_id} placeholder="U0XXXXXXXXX" autoComplete="off" />
+                          <label>Email (optional — only if this person has their own address)</label>
+                          <input name="email" type="email" defaultValue={m.email || ''} autoComplete="off" />
                         </div>
                         <button type="submit" className="secondary">Save details</button>
                       </form>
@@ -140,8 +142,8 @@ export default async function AdminPage({ searchParams }) {
             <input name="name" required placeholder="e.g. Jess" autoComplete="off" />
           </div>
           <div>
-            <label>Email (used to sign in)</label>
-            <input name="email" type="email" required placeholder="jess@dtfnow.co.uk" autoComplete="off" />
+            <label>Slack member ID (used to sign in and for @mentions)</label>
+            <input name="slack_id" required placeholder="U0XXXXXXXXX" autoComplete="off" />
           </div>
           <div>
             <label>Role</label>
@@ -152,11 +154,11 @@ export default async function AdminPage({ searchParams }) {
           </div>
           <div>
             <label>Password</label>
-            <input name="password" type="password" placeholder="Set an initial password" autoComplete="new-password" />
+            <input name="password" type="password" required placeholder="Set an initial password" autoComplete="new-password" />
           </div>
           <div>
-            <label>Slack member ID (optional, for @mentions)</label>
-            <input name="slack_id" placeholder="U0XXXXXXXXX" autoComplete="off" />
+            <label>Email (optional — only if this person has their own address)</label>
+            <input name="email" type="email" autoComplete="off" />
           </div>
           <button type="submit">Add staff member</button>
         </form>

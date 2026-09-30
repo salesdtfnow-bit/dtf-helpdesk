@@ -396,18 +396,32 @@ export async function deleteCannedAction(formData) {
 
 // ---- Auth ----
 
+// Staff sign in with their name or Slack member ID (a personal email still works for
+// legacy rows that have one). If the identifier matches more than one active member we
+// refuse rather than guess.
 export async function loginAction(formData) {
-  const email = String(formData.get('email') || '').trim().toLowerCase();
+  const login = String(formData.get('login') ?? formData.get('email') ?? '').trim();
   const password = String(formData.get('password') || '');
   const nextRaw = String(formData.get('next') || '/tickets');
   const next = nextRaw.startsWith('/') ? nextRaw : '/tickets';
+  if (!login) redirect(`/login?error=1&next=${encodeURIComponent(next)}`);
   await ensureSchema();
   const sql = getSql();
-  const [s] = await sql`SELECT * FROM staff WHERE lower(email) = ${email} AND active = true`;
+  const lower = login.toLowerCase();
+  const upper = login.toUpperCase();
+  const matches = await sql`
+    SELECT * FROM staff
+    WHERE active = true
+      AND (lower(trim(name)) = ${lower}
+        OR (slack_id <> '' AND upper(trim(slack_id)) = ${upper})
+        OR lower(email) = ${lower})
+    LIMIT 2`;
+  if (matches.length > 1) redirect(`/login?error=ambiguous&next=${encodeURIComponent(next)}`);
+  const s = matches[0];
   if (!s || !s.password_hash || !verifyPassword(password, s.password_hash)) {
     redirect(`/login?error=1&next=${encodeURIComponent(next)}`);
   }
-  const value = await makeStaffSession({ id: s.id, email: s.email, name: s.name, role: s.role });
+  const value = await makeStaffSession({ id: s.id, email: s.email || null, name: s.name, role: s.role });
   cookies().set(STAFF_COOKIE, value, {
     httpOnly: true,
     secure: true,
@@ -429,6 +443,39 @@ function duplicateEmailMessage(email) {
   return `A staff member with email ${email} already exists — edit their row instead`;
 }
 
+const SLACK_ID_RE = /^[UW][A-Z0-9]{6,}$/;
+
+// Read + validate the staff identity fields shared by the add and edit forms.
+// Empty email is stored as NULL (never ''), so several email-less staff can coexist.
+function readStaffFields(formData) {
+  const name = String(formData.get('name') || '').trim().slice(0, 100);
+  const slack_id = String(formData.get('slack_id') || '').trim().toUpperCase().slice(0, 50);
+  const email = String(formData.get('email') || '').trim().toLowerCase().slice(0, 200) || null;
+  if (!name) adminNotice('error', 'Name is required.');
+  if (!slack_id) adminNotice('error', 'Slack member ID is required.');
+  if (!SLACK_ID_RE.test(slack_id)) {
+    adminNotice('error', `"${slack_id}" doesn't look like a Slack member ID (e.g. U0XXXXXXXXX).`);
+  }
+  return { name, slack_id, email };
+}
+
+// Name, Slack ID and (if given) email must each be unique across all staff rows
+// (active or not). excludeId skips the row being edited.
+async function staffClashMessage(sql, { name, slack_id, email }, excludeId = 0) {
+  const [byName] = await sql`
+    SELECT id FROM staff WHERE lower(trim(name)) = ${name.toLowerCase()} AND id <> ${excludeId} LIMIT 1`;
+  if (byName) return `A staff member named ${name} already exists — edit their row instead`;
+  const [bySlack] = await sql`
+    SELECT name FROM staff WHERE upper(trim(slack_id)) = ${slack_id} AND id <> ${excludeId} LIMIT 1`;
+  if (bySlack) return `Slack member ID ${slack_id} is already used by ${bySlack.name}`;
+  if (email) {
+    const [byEmail] = await sql`
+      SELECT id FROM staff WHERE lower(email) = ${email} AND id <> ${excludeId} LIMIT 1`;
+    if (byEmail) return duplicateEmailMessage(email);
+  }
+  return '';
+}
+
 // Active admins other than the given staff id (lockout protection).
 async function otherActiveAdmins(sql, id) {
   const [{ count }] = await sql`
@@ -445,16 +492,14 @@ export async function addStaffAction(formData) {
   await requireAdmin();
   await ensureSchema();
   const sql = getSql();
-  const name = String(formData.get('name') || '').trim().slice(0, 100);
-  const email = String(formData.get('email') || '').trim().toLowerCase().slice(0, 200);
+  const { name, slack_id, email } = readStaffFields(formData);
   const role = String(formData.get('role') || 'agent') === 'admin' ? 'admin' : 'agent';
-  const slack_id = String(formData.get('slack_id') || '').trim().slice(0, 50);
   const password = String(formData.get('password') || '');
-  if (!name || !email) adminNotice('error', 'Name and email are required.');
+  if (!password) adminNotice('error', 'A password is required for new staff.');
   // Plain insert: never touch an existing member (autofilled emails used to overwrite rows).
-  const [existing] = await sql`SELECT id FROM staff WHERE lower(email) = ${email}`;
-  if (existing) adminNotice('error', duplicateEmailMessage(email));
-  const password_hash = password ? hashPassword(password) : '';
+  const clash = await staffClashMessage(sql, { name, slack_id, email });
+  if (clash) adminNotice('error', clash);
+  const password_hash = hashPassword(password);
   let duplicate = false;
   try {
     await sql`
@@ -464,7 +509,9 @@ export async function addStaffAction(formData) {
     if (e.code !== '23505') throw e;
     duplicate = true;
   }
-  if (duplicate) adminNotice('error', duplicateEmailMessage(email));
+  if (duplicate) {
+    adminNotice('error', email ? duplicateEmailMessage(email) : 'That staff member already exists — edit their row instead');
+  }
   revalidatePath('/admin');
   adminNotice('ok', `Added ${name}`);
 }
@@ -474,12 +521,10 @@ export async function updateStaffAction(formData) {
   await ensureSchema();
   const sql = getSql();
   const id = Number(formData.get('id'));
-  const name = String(formData.get('name') || '').trim().slice(0, 100);
-  const email = String(formData.get('email') || '').trim().toLowerCase().slice(0, 200);
-  const slack_id = String(formData.get('slack_id') || '').trim().slice(0, 50);
-  if (!id || !name || !email) adminNotice('error', 'Name and email are required.');
-  const [clash] = await sql`SELECT id FROM staff WHERE lower(email) = ${email} AND id <> ${id}`;
-  if (clash) adminNotice('error', duplicateEmailMessage(email));
+  if (!id) adminNotice('error', 'Staff member not found.');
+  const { name, slack_id, email } = readStaffFields(formData);
+  const clash = await staffClashMessage(sql, { name, slack_id, email }, id);
+  if (clash) adminNotice('error', clash);
   let duplicate = false;
   let updated = null;
   try {
@@ -491,7 +536,9 @@ export async function updateStaffAction(formData) {
     if (e.code !== '23505') throw e;
     duplicate = true;
   }
-  if (duplicate) adminNotice('error', duplicateEmailMessage(email));
+  if (duplicate) {
+    adminNotice('error', email ? duplicateEmailMessage(email) : 'That staff member already exists — edit their row instead');
+  }
   if (!updated) adminNotice('error', 'Staff member not found.');
   revalidatePath('/admin');
   adminNotice('ok', `Updated ${name}`);
