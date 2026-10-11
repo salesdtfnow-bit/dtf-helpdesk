@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { shopifyGraphQL } from '../../../../lib/shopify';
-import { appUrl } from '../../../../lib/slack';
+import { appUrl } from '../../../../lib/notify';
 
 export const dynamic = 'force-dynamic';
 
