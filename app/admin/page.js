@@ -112,8 +112,8 @@ export default async function AdminPage({ searchParams }) {
                           <input name="email" type="email" required defaultValue={m.email} autoComplete="off" />
                         </div>
                         <div>
-                          <label>Slack member ID</label>
-                          <input name="slack_id" defaultValue={m.slack_id} placeholder="U0XXXXXXXXX" autoComplete="off" />
+                          <label>Discord user ID</label>
+                          <input name="discord_id" defaultValue={m.discord_id} placeholder="18–19 digit number" inputMode="numeric" autoComplete="off" />
                         </div>
                         <button type="submit" className="secondary">Save details</button>
                       </form>
@@ -155,8 +155,8 @@ export default async function AdminPage({ searchParams }) {
             <input name="password" type="password" placeholder="Set an initial password" autoComplete="new-password" />
           </div>
           <div>
-            <label>Slack member ID (optional, for @mentions)</label>
-            <input name="slack_id" placeholder="U0XXXXXXXXX" autoComplete="off" />
+            <label>Discord user ID (optional, for @mentions in #dtfnow-ticket)</label>
+            <input name="discord_id" placeholder="18–19 digit number" inputMode="numeric" autoComplete="off" />
           </div>
           <button type="submit">Add staff member</button>
         </form>

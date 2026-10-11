@@ -1,6 +1,6 @@
 # DTF Now Helpdesk
 
-Custom ticketing app for DTF Now — tickets from web form, email, Slack and Shopify order context, with Slack notifications and in-app assignment.
+Custom ticketing app for DTF Now — tickets from web form, email, Slack and Shopify order context, with Discord notifications (#dtfnow-ticket) and in-app assignment.
 
 ## Pages
 
@@ -16,10 +16,11 @@ Custom ticketing app for DTF Now — tickets from web form, email, Slack and Sho
 | `DATABASE_URL` | yes | Postgres connection (add Neon via Vercel → Storage) |
 | `ADMIN_PASSWORD` | recommended | Protects agent area (user: `admin` or `ADMIN_USER`) |
 | `AGENTS` | recommended | Comma-separated agent names, e.g. `Vitaly,Sam` |
-| `SLACK_WEBHOOK_URL` | for Slack notifications | Incoming webhook for your channel |
+| `DISCORD_WEBHOOK_URL` | for team notifications | Webhook of the Discord channel (#dtfnow-ticket) |
+| `AGENT_DISCORD_IDS` | optional | Extra `Name:DiscordUserId` pairs, comma-separated (the Admin page is the main place) |
 | `SHOPIFY_STORE` | for order context | myshopify subdomain, e.g. `d0dc54-ad` |
 | `SHOPIFY_ADMIN_TOKEN` | for order context | Admin API token (custom app, `read_orders`) |
-| `APP_URL` | optional | Public base URL used in Slack links |
+| `APP_URL` | optional | Public base URL used in notification links |
 | `INBOUND_SECRET` | optional | Protects `/api/inbound-email` |
 | `INTAKE_SECRET` | optional | Protects `/api/tickets` |
 | `SLACK_SLASH_TOKEN` | optional | Verifies Slack slash command requests |
@@ -30,11 +31,15 @@ Custom ticketing app for DTF Now — tickets from web form, email, Slack and Sho
 - `POST /api/inbound-email?secret=...` — SendGrid Inbound Parse or JSON `{from, subject, text}`. Auto-categorises (reprint, print quality, shipping…) and extracts order numbers.
 - `POST /api/slack` — Slack slash command (`/newticket ...`)
 
-## Slack setup (notifications)
+## Discord setup (notifications)
 
-1. Open https://api.slack.com/apps → Create App → From scratch.
-2. Incoming Webhooks → activate → Add New Webhook → pick your channel (e.g. #help-desk-support).
-3. Copy the webhook URL into `SLACK_WEBHOOK_URL`.
+New tickets, assignments, status changes and reprints are posted to Discord.
+
+1. In Discord, open #dtfnow-ticket → Edit Channel → Integrations → Webhooks → New Webhook → Copy Webhook URL.
+2. Put it in `DISCORD_WEBHOOK_URL` (Vercel → Settings → Environment Variables) and redeploy.
+3. For @mentions, add each person's Discord user ID on the Admin page (Discord: Settings → Advanced → Developer Mode on, then right-click the person → Copy User ID).
+
+Slack notifications were removed in Oct 2026; `SLACK_WEBHOOK_URL` is no longer used. The `/api/slack` slash command still works if it's set up.
 
 ## Shopify setup (order context)
 
