@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createTicket } from '../../../lib/tickets';
 import { ticketRef } from '../../../lib/db';
-import { appUrl } from '../../../lib/slack';
+import { appUrl } from '../../../lib/notify';
 
 // Slack slash command endpoint, e.g. /newticket Customer jane@x.com order #1234 prints peeling
 // Create a slash command in your Slack app pointing at:  POST /api/slack
