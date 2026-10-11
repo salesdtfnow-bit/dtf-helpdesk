@@ -5,7 +5,7 @@ import { redirect } from 'next/navigation';
 import { cookies } from 'next/headers';
 import { getSql, ensureSchema, ticketRef } from '../lib/db';
 import { createTicket } from '../lib/tickets';
-import { notifyAssigned, notifyStatus, notifySlack, appUrl } from '../lib/slack';
+import { notifyAssigned, notifyStatus, notifyReprint, appUrl } from '../lib/notify';
 import { sendCustomerEmail } from '../lib/email';
 import { createReprint, reprintConfigured } from '../lib/reprint';
 import { relayFilesToUploader, uploadsConfigured, uploadPageUrl } from '../lib/uploads';
@@ -110,7 +110,7 @@ export async function deleteTicketAction(formData) {
   redirect('/tickets');
 }
 
-// Shared status update (Status form + quick-action buttons): update, Slack notify, history.
+// Shared status update (Status form + quick-action buttons): update, Discord notify, history.
 async function applyStatus(sql, id, status, actor) {
   const allowed = ['open', 'in_progress', 'waiting', 'resolved', 'closed'];
   if (!allowed.includes(status)) return;
@@ -122,7 +122,7 @@ async function applyStatus(sql, id, status, actor) {
   if (t && before && before.status !== status) await logEvent(id, actor, 'status', before.status, status);
 }
 
-// Shared assignment (Assign form + "Start working"): update, Slack notify, history.
+// Shared assignment (Assign form + "Start working"): update, Discord notify, history.
 // Assigning someone to an Open ticket moves it to In progress.
 async function applyAssign(sql, id, assignee, actor) {
   const [before] = await sql`SELECT assignee FROM tickets WHERE id = ${id}`;
@@ -238,7 +238,7 @@ export async function raiseReprintAction(formData) {
     await sql`UPDATE tickets SET reprint_id = ${created.id}, reprint_token = ${created.publicToken || ''}, updated_at = now() WHERE id = ${id}`;
     await sql`INSERT INTO comments (ticket_id, author, body, internal)
       VALUES (${id}, 'System', ${'Reprint raised in tracker' + (created.trackUrl ? ` — customer tracking: ${created.trackUrl}` : '')}, true)`;
-    await notifySlack(`:repeat: Reprint raised from ticket *${ticketRef(id)}*${t.order_number ? ` (order ${t.order_number})` : ''}`);
+    await notifyReprint(id, t.order_number);
     await logEvent(id, await currentActor(String(formData.get('raisedBy') || 'Helpdesk')), 'reprint', '', created.id);
   } else {
     await sql`INSERT INTO comments (ticket_id, author, body, internal)
@@ -441,6 +441,13 @@ async function isLastActiveAdmin(sql, id) {
   return !!target && target.role === 'admin' && target.active && (await otherActiveAdmins(sql, id)) === 0;
 }
 
+// Discord user ID: digits only (Discord: Settings → Advanced → Developer Mode, then right-click the user → Copy User ID).
+// Anything that isn't a plain ID (e.g. "<@123…>") is reduced to its digits; junk becomes ''.
+function discordId(v) {
+  const d = String(v || '').replace(/\D/g, '');
+  return /^\d{15,25}$/.test(d) ? d : '';
+}
+
 export async function addStaffAction(formData) {
   await requireAdmin();
   await ensureSchema();
@@ -448,7 +455,7 @@ export async function addStaffAction(formData) {
   const name = String(formData.get('name') || '').trim().slice(0, 100);
   const email = String(formData.get('email') || '').trim().toLowerCase().slice(0, 200);
   const role = String(formData.get('role') || 'agent') === 'admin' ? 'admin' : 'agent';
-  const slack_id = String(formData.get('slack_id') || '').trim().slice(0, 50);
+  const discord_id = discordId(formData.get('discord_id'));
   const password = String(formData.get('password') || '');
   if (!name || !email) adminNotice('error', 'Name and email are required.');
   // Plain insert: never touch an existing member (autofilled emails used to overwrite rows).
@@ -458,8 +465,8 @@ export async function addStaffAction(formData) {
   let duplicate = false;
   try {
     await sql`
-      INSERT INTO staff (name, email, role, slack_id, password_hash)
-      VALUES (${name}, ${email}, ${role}, ${slack_id}, ${password_hash})`;
+      INSERT INTO staff (name, email, role, discord_id, password_hash)
+      VALUES (${name}, ${email}, ${role}, ${discord_id}, ${password_hash})`;
   } catch (e) {
     if (e.code !== '23505') throw e;
     duplicate = true;
@@ -476,7 +483,7 @@ export async function updateStaffAction(formData) {
   const id = Number(formData.get('id'));
   const name = String(formData.get('name') || '').trim().slice(0, 100);
   const email = String(formData.get('email') || '').trim().toLowerCase().slice(0, 200);
-  const slack_id = String(formData.get('slack_id') || '').trim().slice(0, 50);
+  const discord_id = discordId(formData.get('discord_id'));
   if (!id || !name || !email) adminNotice('error', 'Name and email are required.');
   const [clash] = await sql`SELECT id FROM staff WHERE lower(email) = ${email} AND id <> ${id}`;
   if (clash) adminNotice('error', duplicateEmailMessage(email));
@@ -484,7 +491,7 @@ export async function updateStaffAction(formData) {
   let updated = null;
   try {
     const rows = await sql`
-      UPDATE staff SET name = ${name}, email = ${email}, slack_id = ${slack_id}
+      UPDATE staff SET name = ${name}, email = ${email}, discord_id = ${discord_id}
       WHERE id = ${id} RETURNING id`;
     updated = rows[0] || null;
   } catch (e) {
