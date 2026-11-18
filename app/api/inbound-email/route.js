@@ -59,7 +59,9 @@ export async function POST(req) {
     if (t) {
       await sql`INSERT INTO comments (ticket_id, author, body, internal)
         VALUES (${ticketId}, ${(name || email).slice(0, 100)}, ${(text || '').slice(0, 10000)}, false)`;
-      const newStatus = ['resolved', 'closed', 'waiting'].includes(t.status) ? 'open' : t.status;
+      // Same rule as the IMAP sync (lib/imap.js): only Waiting -> Open. Resolved/Closed
+      // tickets are not reopened by late "thank you" replies.
+      const newStatus = t.status === 'waiting' ? 'open' : t.status;
       await sql`UPDATE tickets SET status = ${newStatus}, updated_at = now() WHERE id = ${ticketId}`;
       await logEvent(ticketId, 'Email', 'customer_reply', '', email);
       if (newStatus !== t.status) await logEvent(ticketId, 'Email', 'status', t.status, newStatus);
