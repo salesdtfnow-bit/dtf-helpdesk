@@ -55,14 +55,13 @@ export async function POST(req) {
   const refMatch = /DTF-(\d{4,})/i.exec(subject);
   if (refMatch) {
     const ticketId = Number(refMatch[1]) - 1000;
-    const [t] = await sql`SELECT * FROM tickets WHERE id = ${ticketId}`;
+    const [t] = await sql`SELECT id FROM tickets WHERE id = ${ticketId}`;
     if (t) {
       await sql`INSERT INTO comments (ticket_id, author, body, internal)
         VALUES (${ticketId}, ${(name || email).slice(0, 100)}, ${(text || '').slice(0, 10000)}, false)`;
-      const newStatus = ['resolved', 'closed', 'waiting'].includes(t.status) ? 'open' : t.status;
-      await sql`UPDATE tickets SET status = ${newStatus}, updated_at = now() WHERE id = ${ticketId}`;
+      // Same rule as the IMAP sync (lib/imap.js): a customer reply never changes status.
+      await sql`UPDATE tickets SET updated_at = now() WHERE id = ${ticketId}`;
       await logEvent(ticketId, 'Email', 'customer_reply', '', email);
-      if (newStatus !== t.status) await logEvent(ticketId, 'Email', 'status', t.status, newStatus);
     }
   }
 
