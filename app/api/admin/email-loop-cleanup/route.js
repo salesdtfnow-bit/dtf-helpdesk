@@ -3,25 +3,29 @@ import { getSql, ensureSchema, ticketRef } from '../../../../lib/db';
 import { requireAdmin } from '../../../../lib/auth';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 // One-off repair for the email sync re-import loop (17 Nov 2026).
-//   GET  -> dry run: counts + tickets that would be restored. Changes nothing.
-//   POST -> applies the same plan in a single transaction.
-// Removes only exact duplicates (first copy is always kept) and restores tickets whose
-// latest status change was an automatic "customer email reply" reopen that no staff
-// member has acted on since.
+//   GET  -> dry run: counts + tickets that would be restored. Changes no data.
+//   POST -> applies exactly the same plan in a single transaction (all or nothing).
+// Removes only exact duplicates (the first copy is always kept) and restores tickets
+// whose latest status change was an automatic "customer email reply" reopen that no
+// staff member has acted on since.
 
-function plan(sql) {
+// Builds temp tables (dropped at commit) holding the ids to remove. Both GET and POST
+// run this, so the dry-run numbers are exactly what POST deletes.
+async function buildPlan(sql) {
   // Copies of the same email (same Message-ID): keep the first.
-  const dupEmailIds = sql`
+  await sql`
+    CREATE TEMP TABLE _dup_emails ON COMMIT DROP AS
     SELECT id FROM (
       SELECT id, row_number() OVER (PARTITION BY message_id ORDER BY id) AS rn
       FROM email_messages WHERE message_id <> ''
     ) x WHERE rn > 1`;
 
   // Identical customer comments on the same ticket, created within 6h of the first copy.
-  const dupCommentIds = sql`
+  await sql`
+    CREATE TEMP TABLE _dup_comments ON COMMIT DROP AS
     SELECT id FROM (
       SELECT c.id, c.created_at,
         row_number() OVER w AS rn,
@@ -34,7 +38,8 @@ function plan(sql) {
 
   // "Customer replied by email" history entries beyond the number of distinct emails
   // that sender actually sent on that ticket (counted from the comments that remain).
-  const dupEventIds = sql`
+  await sql`
+    CREATE TEMP TABLE _dup_events ON COMMIT DROP AS
     SELECT ev.id FROM (
       SELECT id, ticket_id, to_value,
         row_number() OVER (PARTITION BY ticket_id, to_value ORDER BY created_at, id) AS rn
@@ -43,15 +48,18 @@ function plan(sql) {
     JOIN (
       SELECT c.ticket_id, conv.email, count(DISTINCT c.id) AS n
       FROM comments c
-      JOIN email_messages em ON em.direction = 'in' AND left(em.body, 10000) = c.body
+      JOIN email_messages em
+        ON em.direction = 'in' AND md5(left(em.body, 10000)) = md5(c.body)
       JOIN email_conversations conv ON conv.id = em.conversation_id
-      WHERE c.internal = false AND c.id NOT IN (${dupCommentIds})
+      WHERE c.internal = false
+        AND NOT EXISTS (SELECT 1 FROM _dup_comments d WHERE d.id = c.id)
+        AND NOT EXISTS (SELECT 1 FROM _dup_emails d WHERE d.id = em.id)
       GROUP BY c.ticket_id, conv.email
     ) cr ON cr.ticket_id = ev.ticket_id AND cr.email = ev.to_value
     WHERE ev.rn > cr.n`;
 
   // Tickets reopened by a customer email whose status no staff member has touched since.
-  const restore = sql`
+  const restore = await sql`
     WITH last_status AS (
       SELECT DISTINCT ON (ticket_id) ticket_id, from_value, to_value, actor, created_at
       FROM ticket_events WHERE type = 'status'
@@ -68,7 +76,11 @@ function plan(sql) {
       )
     ORDER BY t.id`;
 
-  return { dupEmailIds, dupCommentIds, dupEventIds, restore };
+  const [{ emails, comments, events }] = await sql`
+    SELECT (SELECT count(*)::int FROM _dup_emails) AS emails,
+           (SELECT count(*)::int FROM _dup_comments) AS comments,
+           (SELECT count(*)::int FROM _dup_events) AS events`;
+  return { restore, counts: { duplicateEmails: emails, duplicateComments: comments, duplicateHistory: events } };
 }
 
 async function guard() {
@@ -92,17 +104,9 @@ export async function GET() {
   const denied = await guard();
   if (denied) return denied;
   await ensureSchema();
-  const sql = getSql();
-  const p = plan(sql);
-  const [{ n: emails }] = await sql`SELECT count(*)::int AS n FROM (${p.dupEmailIds}) x`;
-  const [{ n: comments }] = await sql`SELECT count(*)::int AS n FROM (${p.dupCommentIds}) x`;
-  const [{ n: events }] = await sql`SELECT count(*)::int AS n FROM (${p.dupEventIds}) x`;
-  const restore = await p.restore;
-  return NextResponse.json({
-    dryRun: true,
-    wouldDelete: { duplicateEmails: emails, duplicateComments: comments, duplicateHistory: events },
-    wouldRestore: fmt(restore),
-  });
+  // Temp tables only — no data changes; they are dropped when this transaction ends.
+  const plan = await getSql().begin((sql) => buildPlan(sql));
+  return NextResponse.json({ dryRun: true, wouldDelete: plan.counts, wouldRestore: fmt(plan.restore) });
 }
 
 export async function POST() {
@@ -110,13 +114,12 @@ export async function POST() {
   if (denied) return denied;
   await ensureSchema();
   const result = await getSql().begin(async (sql) => {
-    const p = plan(sql);
-    const restore = await p.restore;
-    const ev = await sql`DELETE FROM ticket_events WHERE id IN (${p.dupEventIds}) RETURNING id`;
-    const att = await sql`DELETE FROM email_attachments WHERE email_message_id IN (${p.dupEmailIds}) RETURNING id`;
-    const em = await sql`DELETE FROM email_messages WHERE id IN (${p.dupEmailIds}) RETURNING id`;
-    const cm = await sql`DELETE FROM comments WHERE id IN (${p.dupCommentIds}) RETURNING id`;
-    for (const r of restore) {
+    const plan = await buildPlan(sql);
+    const ev = await sql`DELETE FROM ticket_events WHERE id IN (SELECT id FROM _dup_events) RETURNING id`;
+    const att = await sql`DELETE FROM email_attachments WHERE email_message_id IN (SELECT id FROM _dup_emails) RETURNING id`;
+    const em = await sql`DELETE FROM email_messages WHERE id IN (SELECT id FROM _dup_emails) RETURNING id`;
+    const cm = await sql`DELETE FROM comments WHERE id IN (SELECT id FROM _dup_comments) RETURNING id`;
+    for (const r of plan.restore) {
       await sql`UPDATE tickets SET status = ${r.restore_to}, updated_at = now() WHERE id = ${r.id}`;
       await sql`INSERT INTO ticket_events (ticket_id, actor, type, from_value, to_value)
         VALUES (${r.id}, 'System', 'status', 'open', ${r.restore_to})`;
@@ -125,13 +128,14 @@ export async function POST() {
       UPDATE email_conversations ec SET unread = LEAST(ec.unread, (
         SELECT count(*)::int FROM email_messages m WHERE m.conversation_id = ec.id AND m.direction = 'in'))`;
     return {
+      planned: plan.counts,
       deleted: {
         duplicateEmails: em.length,
         duplicateAttachments: att.length,
         duplicateComments: cm.length,
         duplicateHistory: ev.length,
       },
-      restored: fmt(restore),
+      restored: fmt(plan.restore),
     };
   });
   return NextResponse.json({ applied: true, ...result });
